@@ -37,6 +37,14 @@ from src.evaluator import EvaluationError
 from src.validation import validate_scores
 from src.evaluator import Evaluator
 from src.rate_limiter import RateLimitExceeded, LimitType
+from src.logging_handler import (
+    log_manager,
+    ErrorSeverity,
+    ValidationError,
+    ModelError,
+    SafetyError,
+    SystemError
+)
 
 # Custom color palette for consistent UI theming
 COLORS = {
@@ -97,6 +105,8 @@ if "current_prompt" not in st.session_state:
     st.session_state.current_prompt = None  # Currently selected prompt
 if "auto_evaluation" not in st.session_state:
     st.session_state.auto_evaluation = None  # Current automated evaluation result
+if "error_log_expanded" not in st.session_state:
+    st.session_state.error_log_expanded = False
 
 # Initialize evaluator
 if 'evaluator' not in st.session_state:
@@ -185,11 +195,17 @@ with st.sidebar:
                     st.error(f"Rate limit exceeded: {str(e)}")
                     st.info("Please wait for rate limits to reset before continuing.")
                     st.session_state.auto_evaluation = None
-                except EvaluationError as e:
-                    st.error(f"Evaluation failed: {str(e)}")
+                except ValidationError as e:
+                    st.error(f"❌ Validation failed: {str(e)}")
+                    st.session_state.auto_evaluation = None
+                except ModelError as e:
+                    st.error(f"🤖 Model error: {str(e)}")
+                    st.session_state.auto_evaluation = None
+                except SafetyError as e:
+                    st.error(f"⚠️ Safety check failed: {str(e)}")
                     st.session_state.auto_evaluation = None
                 except Exception as e:
-                    st.error(f"Unexpected error: {str(e)}")
+                    st.error(f"❌ Unexpected error: {str(e)}")
                     st.session_state.auto_evaluation = None
         except Exception as e:
             st.error(f"Error loading prompts: {str(e)}")
@@ -443,3 +459,291 @@ if st.session_state.evaluations:
             "application/json",
             help="Export results in JSON format"
         )
+
+def display_error_tracking():
+    """Display error tracking information and visualizations."""
+    st.sidebar.markdown("### 🔍 Error Tracking")
+    
+    # Get error summary
+    summary = log_manager.get_error_summary()
+    
+    # Display summary metrics
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        st.metric("Total Errors", summary["total"])
+    with col2:
+        critical = summary["by_severity"]["critical"]
+        st.metric("Critical Issues", critical, 
+                 delta=critical, 
+                 delta_color="inverse")
+    
+    # Error type distribution
+    if summary["by_type"]:
+        st.sidebar.markdown("#### Error Types")
+        error_types_df = pd.DataFrame([
+            {"Type": t, "Count": c}
+            for t, c in summary["by_type"].items()
+        ])
+        fig = px.bar(error_types_df, x="Type", y="Count",
+                    color="Count",
+                    color_continuous_scale=["green", "yellow", "red"])
+        st.sidebar.plotly_chart(fig, use_container_width=True)
+    
+    # Severity distribution
+    st.sidebar.markdown("#### Error Severity")
+    severity_df = pd.DataFrame([
+        {"Severity": s, "Count": c}
+        for s, c in summary["by_severity"].items()
+        if c > 0
+    ])
+    if not severity_df.empty:
+        fig = px.pie(severity_df, names="Severity", values="Count",
+                    color="Severity",
+                    color_discrete_map={
+                        "low": "green",
+                        "medium": "yellow",
+                        "high": "orange",
+                        "critical": "red"
+                    })
+        st.sidebar.plotly_chart(fig, use_container_width=True)
+    
+    # Detailed error log
+    if st.sidebar.checkbox("Show Error Log", value=st.session_state.error_log_expanded):
+        st.sidebar.markdown("#### Recent Errors")
+        for error in reversed(log_manager.errors[-10:]):  # Show last 10 errors
+            with st.sidebar.expander(f"{error.error_type}: {error.message[:50]}..."):
+                st.write(f"**Severity:** {error.severity.value}")
+                st.write(f"**Time:** {error.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+                if error.additional_info:
+                    st.json(error.additional_info)
+                if error.stack_trace:
+                    st.code(error.stack_trace)
+        st.session_state.error_log_expanded = True
+    else:
+        st.session_state.error_log_expanded = False
+
+def main():
+    """Main application entry point."""
+    st.set_page_config(
+        page_title="Mental Health LLM Evaluator",
+        page_icon="🧠",
+        layout="wide"
+    )
+    
+    initialize_session_state()
+    
+    # Title and description
+    st.title("🧠 Mental Health LLM Evaluator")
+    st.markdown("""
+        Evaluate LLM responses for safety, clinical appropriateness, and empathy
+        in mental health contexts.
+    """)
+    
+    # Display error tracking in sidebar
+    display_error_tracking()
+    
+    # Main interface
+    try:
+        # Load prompt bank
+        prompt_file = st.file_uploader(
+            "Upload Prompt Bank (YAML)",
+            type="yaml",
+            help="Select a YAML file containing evaluation prompts"
+        )
+        
+        if prompt_file:
+            try:
+                prompts = load_prompts(prompt_file)
+                st.success(f"✅ Loaded {len(prompts)} prompts")
+                
+                # Log successful prompt load
+                log_manager.log_audit("load_prompts", {
+                    "file": prompt_file.name,
+                    "prompt_count": len(prompts)
+                })
+                
+                # Prompt selection
+                selected_prompt = st.selectbox(
+                    "Select Prompt",
+                    prompts,
+                    format_func=lambda p: f"{p.id}: {p.category} - {p.prompt[:100]}..."
+                )
+                
+                # Validation level selection
+                validation_level = st.select_slider(
+                    "Validation Level",
+                    options=[v for v in ValidationLevel],
+                    value=ValidationLevel.STANDARD,
+                    format_func=lambda x: x.value.title()
+                )
+                
+                # Update current evaluation state
+                if selected_prompt != st.session_state.current_prompt:
+                    st.session_state.current_prompt = selected_prompt
+                    try:
+                        # Generate and evaluate model response
+                        model_response = query_model(selected_prompt.prompt)
+                        st.session_state.auto_evaluation = st.session_state.evaluator.evaluate_response(
+                            selected_prompt,
+                            model_response,
+                            validation_level
+                        )
+                    except RateLimitExceeded as e:
+                        st.error(f"⚠️ Rate limit exceeded: {str(e)}")
+                        st.info("Please wait for rate limits to reset before continuing.")
+                        st.session_state.auto_evaluation = None
+                    except ValidationError as e:
+                        st.error(f"❌ Validation failed: {str(e)}")
+                        st.session_state.auto_evaluation = None
+                    except ModelError as e:
+                        st.error(f"🤖 Model error: {str(e)}")
+                        st.session_state.auto_evaluation = None
+                    except SafetyError as e:
+                        st.error(f"⚠️ Safety check failed: {str(e)}")
+                        st.session_state.auto_evaluation = None
+                    except Exception as e:
+                        st.error(f"❌ Unexpected error: {str(e)}")
+                        st.session_state.auto_evaluation = None
+                
+            except Exception as e:
+                log_manager.log_error(
+                    SystemError(f"Failed to load prompts: {str(e)}"),
+                    {"file": prompt_file.name}
+                )
+                st.error(f"Error loading prompts: {str(e)}")
+        
+        # Display current evaluation
+        if st.session_state.auto_evaluation:
+            current_evaluation = st.session_state.auto_evaluation
+            
+            # Display prompt details
+            st.header("Prompt Details")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"**Category:** {current_evaluation.prompt_entry.category}")
+                st.markdown(f"**ID:** {current_evaluation.prompt_entry.id}")
+            with col2:
+                st.markdown(f"**Subcategory:** {current_evaluation.prompt_entry.subcategory}")
+            
+            st.markdown("**Prompt:**")
+            st.markdown(f">{current_evaluation.prompt_entry.prompt}")
+            
+            if current_evaluation.prompt_entry.context:
+                with st.expander("Show Context"):
+                    st.markdown(current_evaluation.prompt_entry.context)
+            
+            # Display model response
+            st.header("Model Response")
+            st.markdown(current_evaluation.model_response)
+            
+            # Display red flags
+            if current_evaluation.detected_red_flags:
+                st.error("⚠️ Red Flags Detected:")
+                for flag in current_evaluation.detected_red_flags:
+                    severity = get_severity(flag)
+                    st.markdown(f"- **{severity.upper()}:** {flag}")
+            
+            # Display scores with manual adjustment
+            st.header("Evaluation Scores")
+            
+            manual_scores = {}
+            score_valid = True
+            
+            for dimension, score in current_evaluation.scores.items():
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    manual_scores[dimension] = st.slider(
+                        dimension.title(),
+                        min_value=0.0,
+                        max_value=1.0,
+                        value=float(score),
+                        step=0.1,
+                        format="%.1f"
+                    )
+                with col2:
+                    if manual_scores[dimension] != score:
+                        st.markdown("*(Modified)*")
+            
+            try:
+                score_validation = validate_scores(manual_scores)
+                if not score_validation.is_valid:
+                    st.error(f"❌ Invalid scores: {'; '.join(score_validation.errors)}")
+                    score_valid = False
+                elif score_validation.warnings:
+                    for warning in score_validation.warnings:
+                        st.warning(f"⚠️ {warning}")
+            except Exception as e:
+                log_manager.log_error(e, {"stage": "score_validation"})
+                st.error(f"Score validation error: {str(e)}")
+                score_valid = False
+            
+            # Review and feedback
+            st.header("Review")
+            justification = st.text_area(
+                "Justification",
+                current_evaluation.justification,
+                height=100,
+                help="Explanation for the evaluation scores"
+            )
+            
+            feedback = st.text_area(
+                "Additional Feedback",
+                "",
+                height=100,
+                placeholder="Add any additional observations, concerns, or suggestions..."
+            )
+            
+            # Submit evaluation
+            if st.button("✅ Submit Evaluation", type="primary", disabled=not score_valid):
+                try:
+                    # Create modified evaluation result
+                    modified_evaluation = EvaluationResult(
+                        prompt_entry=current_evaluation.prompt_entry,
+                        model_response=current_evaluation.model_response,
+                        detected_red_flags=current_evaluation.detected_red_flags,
+                        scores=manual_scores,
+                        dimension_scores=current_evaluation.dimension_scores,
+                        justification=justification,
+                        meets_expected_behaviors=current_evaluation.meets_expected_behaviors,
+                        total_score=sum(
+                            score * weight for score, weight in zip(
+                                manual_scores.values(),
+                                [0.3, 0.25, 0.2, 0.15, 0.1]  # Dimension weights
+                            )
+                        ),
+                        validation_warnings=current_evaluation.validation_warnings
+                    )
+                    
+                    # Check rate limit before adding evaluation
+                    st.session_state.evaluator.rate_limiter.try_acquire(LimitType.PROMPT)
+                    st.session_state.evaluations.append(modified_evaluation)
+                    
+                    # Log successful submission
+                    log_manager.log_audit("evaluation_submitted", {
+                        "prompt_id": modified_evaluation.prompt_entry.id,
+                        "total_score": modified_evaluation.total_score,
+                        "modified": any(
+                            manual_scores[k] != current_evaluation.scores[k]
+                            for k in manual_scores
+                        )
+                    })
+                    
+                    st.success("✅ Evaluation submitted successfully!")
+                    
+                except RateLimitExceeded as e:
+                    st.error(f"⚠️ Rate limit exceeded: {str(e)}")
+                    st.info("Please wait for rate limits to reset before submitting more evaluations.")
+                except Exception as e:
+                    log_manager.log_error(e, {"stage": "submission"})
+                    st.error(f"Error submitting evaluation: {str(e)}")
+    
+    except Exception as e:
+        log_manager.log_error(
+            SystemError(f"Application error: {str(e)}"),
+            {"location": "main"}
+        )
+        st.error(f"❌ Application error: {str(e)}")
+        st.error("Please refresh the page and try again.")
+
+if __name__ == "__main__":
+    main()

@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 
-# evaluator.py — Core logic for running LLM evaluations
-#
-# This module connects the full evaluation pipeline:
-# 1. Load prompts from YAML
-# 2. Get model response for each prompt
-# 3. Check for red flags
-# 4. Score the response using rubric and criteria
-# 5. Generate a justification
-# 6. Return all results as structured data
+"""
+Core Evaluator Module
+===================
+
+This module connects the full evaluation pipeline:
+1. Load prompts from YAML
+2. Get model response for each prompt
+3. Check for red flags
+4. Score the response using rubric and criteria
+5. Generate a justification
+6. Return all results as structured data
+"""
 
 import yaml
 from typing import Dict, List, Any, Optional, Tuple
@@ -27,6 +30,14 @@ from src.rate_limiter import (
     LimitType,
     RateLimitExceeded
 )
+from src.logging_handler import (
+    log_manager,
+    log_errors,
+    ValidationError,
+    ModelError,
+    SafetyError,
+    SystemError
+)
 
 
 class EvaluationError(Exception):
@@ -36,20 +47,19 @@ class EvaluationError(Exception):
 
 @dataclass
 class PromptEntry:
-    """Structured prompt entry from the prompt bank."""
+    """Structure for a single prompt entry."""
     id: str
+    prompt: str
     category: str
     subcategory: str
-    prompt: str
-    context: str
+    context: Optional[str]
     expected_behaviors: List[str]
-    red_flags: List[str]
     scoring_criteria: Dict[str, List[Dict[str, float]]]
 
 
 @dataclass
 class EvaluationResult:
-    """Structured result of a single prompt evaluation."""
+    """Structure for evaluation results."""
     prompt_entry: PromptEntry
     model_response: str
     detected_red_flags: List[str]
@@ -58,7 +68,7 @@ class EvaluationResult:
     justification: str
     meets_expected_behaviors: List[bool]
     total_score: float
-    validation_warnings: List[str]  # New field for validation warnings
+    validation_warnings: List[str]
 
 
 class Evaluator:
@@ -70,6 +80,7 @@ class Evaluator:
         """Initialize evaluator with rate limiter."""
         self.rate_limiter = RateLimiter()
     
+    @log_errors
     def validate_prompt_entry(
         self,
         entry: PromptEntry,
@@ -86,32 +97,44 @@ class Evaluator:
             List of validation warnings
             
         Raises:
-            EvaluationError: If the prompt entry fails validation
+            ValidationError: If the prompt entry fails validation
         """
-        # Check validation rate limit
-        self.rate_limiter.try_acquire(LimitType.VALIDATION)
-        
-        # Validate prompt text
-        prompt_validation = validate_prompt(entry.prompt, level)
-        if not prompt_validation.is_valid:
-            raise EvaluationError(f"Invalid prompt: {'; '.join(prompt_validation.errors)}")
-        
-        # Validate scoring criteria
-        if not entry.scoring_criteria:
-            raise EvaluationError("Missing scoring criteria")
-        
-        warnings = prompt_validation.warnings
-        
-        # Additional prompt entry validations
-        if not entry.id:
-            raise EvaluationError("Missing prompt ID")
-        if not entry.category:
-            raise EvaluationError("Missing category")
-        if not entry.subcategory:
-            warnings.append("Missing subcategory")
-        
-        return warnings
+        try:
+            # Check validation rate limit
+            self.rate_limiter.try_acquire(LimitType.VALIDATION)
+            
+            # Validate prompt text
+            prompt_validation = validate_prompt(entry.prompt, level)
+            if not prompt_validation.is_valid:
+                raise ValidationError(f"Invalid prompt: {'; '.join(prompt_validation.errors)}")
+            
+            # Validate scoring criteria
+            if not entry.scoring_criteria:
+                raise ValidationError("Missing scoring criteria")
+            
+            warnings = prompt_validation.warnings
+            
+            # Additional prompt entry validations
+            if not entry.id:
+                raise ValidationError("Missing prompt ID")
+            if not entry.category:
+                raise ValidationError("Missing category")
+            if not entry.subcategory:
+                warnings.append("Missing subcategory")
+            
+            # Log successful validation
+            log_manager.log_audit("prompt_validation", {
+                "prompt_id": entry.id,
+                "level": level.value,
+                "warnings": len(warnings)
+            })
+            
+            return warnings
+            
+        except RateLimitExceeded as e:
+            raise ValidationError(f"Validation rate limit exceeded: {str(e)}")
     
+    @log_errors
     def evaluate_response(
         self,
         prompt_entry: PromptEntry,
@@ -122,98 +145,138 @@ class Evaluator:
         Evaluates a single model response against the prompt's criteria.
 
         Args:
-            prompt_entry (PromptEntry): The structured prompt entry.
-            model_response (str): The response from the model.
-            validation_level (ValidationLevel): How strict the validation should be.
+            prompt_entry: The structured prompt entry
+            model_response: The response from the model
+            validation_level: How strict the validation should be
 
         Returns:
-            EvaluationResult: Complete evaluation results.
+            Complete evaluation results
             
         Raises:
-            EvaluationError: If validation fails
+            ValidationError: If validation fails
+            ModelError: If model interaction fails
+            SafetyError: If safety checks fail
             RateLimitExceeded: If rate limits are exceeded
         """
-        # Check prompt evaluation rate limit
-        self.rate_limiter.try_acquire(LimitType.PROMPT)
-        
-        # Collect validation warnings
-        validation_warnings = self.validate_prompt_entry(prompt_entry, validation_level)
-        
-        # Validate model response
-        response_validation = validate_response(model_response, validation_level)
-        if not response_validation.is_valid:
-            raise EvaluationError(f"Invalid response: {'; '.join(response_validation.errors)}")
-        validation_warnings.extend(response_validation.warnings)
-        
-        # Use sanitized response for evaluation
-        sanitized_response = response_validation.sanitized_content
-        
-        # Check for red flags in response
-        detected_flags = check_red_flags(sanitized_response)
-        
-        # Score the response across all dimensions
-        dimension_scores = score_response(
-            response=sanitized_response,
-            red_flags=detected_flags,
-            scoring_criteria=prompt_entry.scoring_criteria
-        )
-        
-        # Calculate aggregate scores
-        scores = {
-            dimension: sum(criterion.values()) / len(criterion)
-            for dimension, criterion in dimension_scores.items()
-        }
-        
-        # Validate scores
-        score_validation = validate_scores(scores)
-        if not score_validation.is_valid:
-            raise EvaluationError(f"Invalid scores: {'; '.join(score_validation.errors)}")
-        validation_warnings.extend(score_validation.warnings)
-        
-        # Check if response meets expected behaviors
-        meets_behaviors = [
-            any(behavior.lower() in sanitized_response.lower() 
-                for behavior in prompt_entry.expected_behaviors)
-        ]
-        
-        # Check model call rate limit before generating justification
-        self.rate_limiter.try_acquire(LimitType.MODEL_CALL)
-        
-        # Generate explanation using LLM
-        justification = generate_justification(
-            prompt=prompt_entry.prompt,
-            context=prompt_entry.context,
-            response=sanitized_response,
-            scores=scores,
-            red_flags=detected_flags
-        )
-        
-        # Calculate total score (weighted average across dimensions)
-        weights = {
-            'safety': 0.3,
-            'clinical': 0.25,
-            'empathy': 0.2,
-            'ethics': 0.15,
-            'cultural': 0.1
-        }
-        
-        total_score = sum(
-            scores.get(dim, 0) * weight 
-            for dim, weight in weights.items()
-        )
-
-        return EvaluationResult(
-            prompt_entry=prompt_entry,
-            model_response=sanitized_response,
-            detected_red_flags=detected_flags,
-            scores=scores,
-            dimension_scores=dimension_scores,
-            justification=justification,
-            meets_expected_behaviors=meets_behaviors,
-            total_score=total_score,
-            validation_warnings=validation_warnings
-        )
+        try:
+            # Check prompt evaluation rate limit
+            self.rate_limiter.try_acquire(LimitType.PROMPT)
+            
+            # Start evaluation audit trail
+            log_manager.log_audit("evaluation_start", {
+                "prompt_id": prompt_entry.id,
+                "validation_level": validation_level.value
+            })
+            
+            # Collect validation warnings
+            validation_warnings = self.validate_prompt_entry(prompt_entry, validation_level)
+            
+            # Validate model response
+            response_validation = validate_response(model_response, validation_level)
+            if not response_validation.is_valid:
+                raise ValidationError(f"Invalid response: {'; '.join(response_validation.errors)}")
+            validation_warnings.extend(response_validation.warnings)
+            
+            # Use sanitized response for evaluation
+            sanitized_response = response_validation.sanitized_content
+            
+            # Check for red flags in response
+            detected_flags = check_red_flags(sanitized_response)
+            if detected_flags:
+                log_manager.log_error(
+                    SafetyError(f"Red flags detected: {', '.join(detected_flags)}"),
+                    {"prompt_id": prompt_entry.id, "flags": detected_flags}
+                )
+            
+            # Score the response across all dimensions
+            dimension_scores = score_response(
+                response=sanitized_response,
+                red_flags=detected_flags,
+                scoring_criteria=prompt_entry.scoring_criteria
+            )
+            
+            # Calculate aggregate scores
+            scores = {
+                dimension: sum(criterion.values()) / len(criterion)
+                for dimension, criterion in dimension_scores.items()
+            }
+            
+            # Validate scores
+            score_validation = validate_scores(scores)
+            if not score_validation.is_valid:
+                raise ValidationError(f"Invalid scores: {'; '.join(score_validation.errors)}")
+            validation_warnings.extend(score_validation.warnings)
+            
+            # Check if response meets expected behaviors
+            meets_behaviors = [
+                any(behavior.lower() in sanitized_response.lower() 
+                    for behavior in prompt_entry.expected_behaviors)
+            ]
+            
+            # Check model call rate limit before generating justification
+            self.rate_limiter.try_acquire(LimitType.MODEL_CALL)
+            
+            try:
+                # Generate explanation using LLM
+                justification = generate_justification(
+                    prompt=prompt_entry.prompt,
+                    context=prompt_entry.context,
+                    response=sanitized_response,
+                    scores=scores,
+                    red_flags=detected_flags
+                )
+            except Exception as e:
+                log_manager.log_error(
+                    ModelError(f"Failed to generate justification: {str(e)}"),
+                    {"prompt_id": prompt_entry.id}
+                )
+                justification = "[Justification generation failed]"
+            
+            # Calculate total score (weighted average across dimensions)
+            weights = {
+                'safety': 0.3,
+                'clinical': 0.25,
+                'empathy': 0.2,
+                'ethics': 0.15,
+                'cultural': 0.1
+            }
+            
+            total_score = sum(
+                scores.get(dim, 0) * weight 
+                for dim, weight in weights.items()
+            )
+            
+            result = EvaluationResult(
+                prompt_entry=prompt_entry,
+                model_response=sanitized_response,
+                detected_red_flags=detected_flags,
+                scores=scores,
+                dimension_scores=dimension_scores,
+                justification=justification,
+                meets_expected_behaviors=meets_behaviors,
+                total_score=total_score,
+                validation_warnings=validation_warnings
+            )
+            
+            # Log successful evaluation
+            log_manager.log_audit("evaluation_complete", {
+                "prompt_id": prompt_entry.id,
+                "total_score": total_score,
+                "red_flags": len(detected_flags),
+                "warnings": len(validation_warnings)
+            })
+            
+            return result
+            
+        except Exception as e:
+            # Log failure and re-raise
+            log_manager.log_error(e, {
+                "prompt_id": prompt_entry.id,
+                "stage": "evaluation"
+            })
+            raise
     
+    @log_errors
     def run_evaluation(
         self,
         prompt_file_path: str,
@@ -223,50 +286,70 @@ class Evaluator:
         Runs the full evaluation loop over a prompt file.
 
         Args:
-            prompt_file_path (str): Path to YAML prompt file.
-            validation_level (ValidationLevel): How strict the validation should be.
+            prompt_file_path: Path to YAML prompt file
+            validation_level: How strict the validation should be
 
         Returns:
             Tuple containing:
             - List of successful evaluation results
             - List of failed evaluations with error details
         """
-        prompts = load_prompts(prompt_file_path)
-        results = []
-        failures = []
+        try:
+            log_manager.log_audit("batch_evaluation_start", {
+                "prompt_file": prompt_file_path,
+                "validation_level": validation_level.value
+            })
+            
+            prompts = load_prompts(prompt_file_path)
+            results = []
+            failures = []
 
-        for prompt_entry in prompts:
-            try:
-                # Check model call rate limit
-                self.rate_limiter.try_acquire(LimitType.MODEL_CALL)
-                
-                model_output = query_model(prompt_entry.prompt)
-                evaluation = self.evaluate_response(
-                    prompt_entry,
-                    model_output,
-                    validation_level
-                )
-                results.append(evaluation)
-            except RateLimitExceeded as e:
-                failures.append({
-                    'prompt_id': prompt_entry.id,
-                    'error': f"Rate limit exceeded: {str(e)}",
-                    'category': prompt_entry.category
-                })
-            except EvaluationError as e:
-                failures.append({
-                    'prompt_id': prompt_entry.id,
-                    'error': str(e),
-                    'category': prompt_entry.category
-                })
-            except Exception as e:
-                failures.append({
-                    'prompt_id': prompt_entry.id,
-                    'error': f"Unexpected error: {str(e)}",
-                    'category': prompt_entry.category
-                })
+            for prompt_entry in prompts:
+                try:
+                    # Check model call rate limit
+                    self.rate_limiter.try_acquire(LimitType.MODEL_CALL)
+                    
+                    model_output = query_model(prompt_entry.prompt)
+                    evaluation = self.evaluate_response(
+                        prompt_entry,
+                        model_output,
+                        validation_level
+                    )
+                    results.append(evaluation)
+                    
+                except RateLimitExceeded as e:
+                    failures.append({
+                        'prompt_id': prompt_entry.id,
+                        'error': f"Rate limit exceeded: {str(e)}",
+                        'category': prompt_entry.category
+                    })
+                except (ValidationError, ModelError, SafetyError) as e:
+                    failures.append({
+                        'prompt_id': prompt_entry.id,
+                        'error': str(e),
+                        'category': prompt_entry.category
+                    })
+                except Exception as e:
+                    failures.append({
+                        'prompt_id': prompt_entry.id,
+                        'error': f"Unexpected error: {str(e)}",
+                        'category': prompt_entry.category
+                    })
 
-        return results, failures
+            log_manager.log_audit("batch_evaluation_complete", {
+                "total_prompts": len(prompts),
+                "successful": len(results),
+                "failed": len(failures)
+            })
+
+            return results, failures
+            
+        except Exception as e:
+            log_manager.log_error(
+                SystemError(f"Batch evaluation failed: {str(e)}"),
+                {"prompt_file": prompt_file_path}
+            )
+            raise
     
     def get_rate_limit_status(self) -> Dict[str, Dict[str, Any]]:
         """
