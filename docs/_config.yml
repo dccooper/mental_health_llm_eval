@@ -1,0 +1,30 @@
+title: Mental Health LLM Evaluation Framework
+description: Framework for evaluating LLM responses in mental health contexts
+theme: jekyll-theme-minimal
+show_downloads: true
+google_analytics:
+markdown: kramdown
+kramdown:
+  syntax_highlighter: rouge
+plugins:
+  - jekyll-feed
+  - jekyll-seo-tag
+  - jekyll-sitemap
+
+# GitHub Pages settings
+repository: yourusername/mental_health_llm_eval
+baseurl: "/mental_health_llm_eval"
+url: "https://yourusername.github.io"
+
+# Navigation
+nav:
+  - title: Home
+    url: /
+  - title: Installation
+    url: /installation
+  - title: Usage
+    url: /usage
+  - title: API Reference
+    url: /api
+  - title: Contributing
+    url: /contributing 

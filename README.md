@@ -162,7 +162,19 @@ prompts:
 
 ## 📚 Documentation
 
-Full documentation is available at [https://mental-health-llm-eval.readthedocs.io/](https://mental-health-llm-eval.readthedocs.io/)
+Documentation is available in two formats:
+
+1. **GitHub Pages**: Visit [https://yourusername.github.io/mental_health_llm_eval](https://yourusername.github.io/mental_health_llm_eval) for the latest published documentation.
+
+2. **ReadTheDocs**: Visit [https://mental-health-llm-eval.readthedocs.io/](https://mental-health-llm-eval.readthedocs.io/) for the full technical documentation.
+
+The documentation includes:
+- Installation and setup guides
+- Usage examples and tutorials
+- API reference
+- Contributing guidelines
+- Best practices for prompt creation
+- Safety and ethical considerations
 
 ## 🤝 Contributing
 
