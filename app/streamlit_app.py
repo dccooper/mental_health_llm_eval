@@ -21,6 +21,7 @@ import json
 from typing import Dict, List
 import plotly.express as px
 from datetime import datetime
+import time
 
 from src.evaluator import (
     PromptEntry,
@@ -33,6 +34,9 @@ from src.models import query_model
 from src.red_flags import check_red_flags, get_severity
 from src.validation import ValidationLevel
 from src.evaluator import EvaluationError
+from src.validation import validate_scores
+from src.evaluator import Evaluator
+from src.rate_limiter import RateLimitExceeded, LimitType
 
 # Custom color palette for consistent UI theming
 COLORS = {
@@ -94,9 +98,36 @@ if "current_prompt" not in st.session_state:
 if "auto_evaluation" not in st.session_state:
     st.session_state.auto_evaluation = None  # Current automated evaluation result
 
+# Initialize evaluator
+if 'evaluator' not in st.session_state:
+    st.session_state.evaluator = Evaluator()
+
 # Sidebar configuration
 with st.sidebar:
     st.title("🧠 Configuration")
+    
+    # Rate limit status
+    st.subheader("📊 Rate Limits")
+    rate_limits = st.session_state.evaluator.get_rate_limit_status()
+    
+    for operation, status in rate_limits.items():
+        with st.expander(f"{operation.title()} Limits"):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric(
+                    "Usage",
+                    f"{status['current_usage']}/{status['total_limit']}"
+                )
+            with col2:
+                st.metric(
+                    "Available Burst",
+                    status['available_tokens']
+                )
+            
+            # Show reset time
+            reset_in = status['reset_time'] - time.time()
+            st.progress(1 - (reset_in / status['time_window']))
+            st.caption(f"Resets in {int(reset_in/60)} minutes")
     
     # Validation level selection
     validation_level = st.selectbox(
@@ -145,16 +176,21 @@ with st.sidebar:
                 try:
                     # Generate and evaluate model response
                     model_response = query_model(selected_prompt.prompt)
-                    st.session_state.auto_evaluation = evaluate_response(
+                    st.session_state.auto_evaluation = st.session_state.evaluator.evaluate_response(
                         selected_prompt,
                         model_response,
                         validation_level
                     )
+                except RateLimitExceeded as e:
+                    st.error(f"Rate limit exceeded: {str(e)}")
+                    st.info("Please wait for rate limits to reset before continuing.")
+                    st.session_state.auto_evaluation = None
                 except EvaluationError as e:
                     st.error(f"Evaluation failed: {str(e)}")
                     st.session_state.auto_evaluation = None
                 except Exception as e:
                     st.error(f"Unexpected error: {str(e)}")
+                    st.session_state.auto_evaluation = None
         except Exception as e:
             st.error(f"Error loading prompts: {str(e)}")
     
@@ -326,8 +362,13 @@ if st.button("✅ Submit Evaluation", type="primary", disabled=not score_valid):
             validation_warnings=current_evaluation.validation_warnings
         )
         
+        # Check rate limit before adding evaluation
+        st.session_state.evaluator.rate_limiter.try_acquire(LimitType.PROMPT)
         st.session_state.evaluations.append(modified_evaluation)
         st.success("✅ Evaluation submitted successfully!")
+    except RateLimitExceeded as e:
+        st.error(f"Rate limit exceeded: {str(e)}")
+        st.info("Please wait for rate limits to reset before submitting more evaluations.")
     except Exception as e:
         st.error(f"Error submitting evaluation: {str(e)}")
 
