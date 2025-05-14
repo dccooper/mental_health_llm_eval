@@ -31,6 +31,8 @@ from src.evaluator import (
 )
 from src.models import query_model
 from src.red_flags import check_red_flags, get_severity
+from src.validation import ValidationLevel
+from src.evaluator import EvaluationError
 
 # Custom color palette for consistent UI theming
 COLORS = {
@@ -96,6 +98,14 @@ if "auto_evaluation" not in st.session_state:
 with st.sidebar:
     st.title("🧠 Configuration")
     
+    # Validation level selection
+    validation_level = st.selectbox(
+        "🔒 Validation Level",
+        [level.value for level in ValidationLevel],
+        help="Choose how strict the input validation should be"
+    )
+    validation_level = ValidationLevel(validation_level)
+    
     # Prompt bank management
     prompt_file = st.file_uploader(
         "📄 Upload Prompt Bank",
@@ -104,38 +114,49 @@ with st.sidebar:
     )
     
     if prompt_file:
-        # Load and organize prompts
-        loaded_prompts = load_prompts(prompt_file)
-        available_categories = sorted(set(p.category for p in loaded_prompts))
-        
-        # Category filtering
-        selected_category = st.selectbox(
-            "🏷️ Filter by Category",
-            ["All"] + available_categories,
-            help="Filter prompts by their category"
-        )
-        
-        # Prompt selection
-        filtered_prompts = [
-            p for p in loaded_prompts
-            if selected_category == "All" or p.category == selected_category
-        ]
-        
-        selected_prompt = st.selectbox(
-            "📝 Select Prompt",
-            filtered_prompts,
-            format_func=lambda p: f"{p.id}: {p.prompt[:50]}...",
-            help="Choose a prompt to evaluate"
-        )
-        
-        # Update current evaluation state
-        if selected_prompt != st.session_state.current_prompt:
-            st.session_state.current_prompt = selected_prompt
-            # Generate and evaluate model response
-            model_response = query_model(selected_prompt.prompt)
-            st.session_state.auto_evaluation = evaluate_response(
-                selected_prompt, model_response
+        try:
+            # Load and organize prompts
+            loaded_prompts = load_prompts(prompt_file)
+            available_categories = sorted(set(p.category for p in loaded_prompts))
+            
+            # Category filtering
+            selected_category = st.selectbox(
+                "🏷️ Filter by Category",
+                ["All"] + available_categories,
+                help="Filter prompts by their category"
             )
+            
+            # Prompt selection
+            filtered_prompts = [
+                p for p in loaded_prompts
+                if selected_category == "All" or p.category == selected_category
+            ]
+            
+            selected_prompt = st.selectbox(
+                "📝 Select Prompt",
+                filtered_prompts,
+                format_func=lambda p: f"{p.id}: {p.prompt[:50]}...",
+                help="Choose a prompt to evaluate"
+            )
+            
+            # Update current evaluation state
+            if selected_prompt != st.session_state.current_prompt:
+                st.session_state.current_prompt = selected_prompt
+                try:
+                    # Generate and evaluate model response
+                    model_response = query_model(selected_prompt.prompt)
+                    st.session_state.auto_evaluation = evaluate_response(
+                        selected_prompt,
+                        model_response,
+                        validation_level
+                    )
+                except EvaluationError as e:
+                    st.error(f"Evaluation failed: {str(e)}")
+                    st.session_state.auto_evaluation = None
+                except Exception as e:
+                    st.error(f"Unexpected error: {str(e)}")
+        except Exception as e:
+            st.error(f"Error loading prompts: {str(e)}")
     
     # Session statistics display
     if st.session_state.evaluations:
@@ -144,6 +165,7 @@ with st.sidebar:
         
         # Calculate key metrics
         total_evaluations = len(st.session_state.evaluations)
+        successful_evals = sum(1 for e in st.session_state.evaluations if not e.validation_warnings)
         average_score = sum(e.total_score for e in st.session_state.evaluations) / total_evaluations
         critical_issues = sum(
             1 for e in st.session_state.evaluations
@@ -151,15 +173,19 @@ with st.sidebar:
         )
         
         # Display metrics
-        st.metric("Prompts Evaluated", total_evaluations)
-        st.metric("Average Score", f"{average_score:.2f}")
-        st.metric(
-            "Critical Issues",
-            critical_issues,
-            delta=-critical_issues,
-            delta_color="inverse",
-            help="Number of responses with critical safety concerns"
-        )
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Total Evaluations", total_evaluations)
+            st.metric("Clean Evaluations", successful_evals)
+        with col2:
+            st.metric("Average Score", f"{average_score:.2f}")
+            st.metric(
+                "Critical Issues",
+                critical_issues,
+                delta=-critical_issues,
+                delta_color="inverse",
+                help="Number of responses with critical safety concerns"
+            )
 
 # Main content area
 st.title("Mental Health LLM Evaluator")
@@ -175,6 +201,12 @@ if not st.session_state.current_prompt or not st.session_state.auto_evaluation:
 # Display current evaluation context
 current_prompt = st.session_state.current_prompt
 current_evaluation = st.session_state.auto_evaluation
+
+# Display validation warnings if any
+if current_evaluation.validation_warnings:
+    with st.expander("⚠️ Validation Warnings", expanded=True):
+        for warning in current_evaluation.validation_warnings:
+            st.warning(warning)
 
 st.header("Prompt Analysis")
 context_col, behavior_col = st.columns(2)
@@ -233,7 +265,7 @@ manual_scores = {}
 for col, (dimension, score) in zip(score_cols, current_evaluation.scores.items()):
     with col:
         st.subheader(dimension.capitalize())
-        manual_scores[dimension] = st.slider(
+        new_score = st.slider(
             f"{dimension} score",
             min_value=0.0,
             max_value=1.0,
@@ -241,6 +273,21 @@ for col, (dimension, score) in zip(score_cols, current_evaluation.scores.items()
             step=0.1,
             help=f"Adjust the {dimension} score if needed"
         )
+        manual_scores[dimension] = new_score
+
+# Validate manual scores before submission
+score_valid = True
+try:
+    score_validation = validate_scores(manual_scores)
+    if not score_validation.is_valid:
+        st.error(f"Invalid scores: {'; '.join(score_validation.errors)}")
+        score_valid = False
+    elif score_validation.warnings:
+        for warning in score_validation.warnings:
+            st.warning(warning)
+except Exception as e:
+    st.error(f"Score validation error: {str(e)}")
+    score_valid = False
 
 # Review and feedback
 st.header("Review")
@@ -259,26 +306,30 @@ feedback = st.text_area(
 )
 
 # Submit evaluation
-if st.button("✅ Submit Evaluation", type="primary"):
-    # Create modified evaluation result with manual adjustments
-    modified_evaluation = EvaluationResult(
-        prompt_entry=current_evaluation.prompt_entry,
-        model_response=current_evaluation.model_response,
-        detected_red_flags=current_evaluation.detected_red_flags,
-        scores=manual_scores,
-        dimension_scores=current_evaluation.dimension_scores,
-        justification=justification,
-        meets_expected_behaviors=current_evaluation.meets_expected_behaviors,
-        total_score=sum(
-            score * weight for score, weight in zip(
-                manual_scores.values(),
-                [0.3, 0.25, 0.2, 0.15, 0.1]  # Dimension weights
-            )
+if st.button("✅ Submit Evaluation", type="primary", disabled=not score_valid):
+    try:
+        # Create modified evaluation result with manual adjustments
+        modified_evaluation = EvaluationResult(
+            prompt_entry=current_evaluation.prompt_entry,
+            model_response=current_evaluation.model_response,
+            detected_red_flags=current_evaluation.detected_red_flags,
+            scores=manual_scores,
+            dimension_scores=current_evaluation.dimension_scores,
+            justification=justification,
+            meets_expected_behaviors=current_evaluation.meets_expected_behaviors,
+            total_score=sum(
+                score * weight for score, weight in zip(
+                    manual_scores.values(),
+                    [0.3, 0.25, 0.2, 0.15, 0.1]  # Dimension weights
+                )
+            ),
+            validation_warnings=current_evaluation.validation_warnings
         )
-    )
-    
-    st.session_state.evaluations.append(modified_evaluation)
-    st.success("✅ Evaluation submitted successfully!")
+        
+        st.session_state.evaluations.append(modified_evaluation)
+        st.success("✅ Evaluation submitted successfully!")
+    except Exception as e:
+        st.error(f"Error submitting evaluation: {str(e)}")
 
 # Results visualization
 if st.session_state.evaluations:
