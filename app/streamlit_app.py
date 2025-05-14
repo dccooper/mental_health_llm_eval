@@ -22,6 +22,8 @@ from typing import Dict, List
 import plotly.express as px
 from datetime import datetime
 import time
+import yaml
+import os
 
 from src.evaluator import (
     PromptEntry,
@@ -45,6 +47,7 @@ from src.logging_handler import (
     SafetyError,
     SystemError
 )
+from src.model_backends import ModelBackendType
 
 # Custom color palette for consistent UI theming
 COLORS = {
@@ -110,7 +113,9 @@ if "error_log_expanded" not in st.session_state:
 
 # Initialize evaluator
 if 'evaluator' not in st.session_state:
-    st.session_state.evaluator = Evaluator()
+    st.session_state.evaluator = None
+if "results" not in st.session_state:
+    st.session_state.results = []
 
 # Sidebar configuration
 with st.sidebar:
@@ -118,26 +123,27 @@ with st.sidebar:
     
     # Rate limit status
     st.subheader("📊 Rate Limits")
-    rate_limits = st.session_state.evaluator.get_rate_limit_status()
-    
-    for operation, status in rate_limits.items():
-        with st.expander(f"{operation.title()} Limits"):
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric(
-                    "Usage",
-                    f"{status['current_usage']}/{status['total_limit']}"
-                )
-            with col2:
-                st.metric(
-                    "Available Burst",
-                    status['available_tokens']
-                )
-            
-            # Show reset time
-            reset_in = status['reset_time'] - time.time()
-            st.progress(1 - (reset_in / status['time_window']))
-            st.caption(f"Resets in {int(reset_in/60)} minutes")
+    if st.session_state.evaluator:
+        rate_limits = st.session_state.evaluator.get_rate_limit_status()
+        
+        for operation, status in rate_limits.items():
+            with st.expander(f"{operation.title()} Limits"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric(
+                        "Usage",
+                        f"{status['current_usage']}/{status['total_limit']}"
+                    )
+                with col2:
+                    st.metric(
+                        "Available Burst",
+                        status['available_tokens']
+                    )
+                
+                # Show reset time
+                reset_in = status['reset_time'] - time.time()
+                st.progress(1 - (reset_in / status['time_window']))
+                st.caption(f"Resets in {int(reset_in/60)} minutes")
     
     # Validation level selection
     validation_level = st.selectbox(
@@ -522,228 +528,217 @@ def display_error_tracking():
     else:
         st.session_state.error_log_expanded = False
 
-def main():
-    """Main application entry point."""
-    st.set_page_config(
-        page_title="Mental Health LLM Evaluator",
-        page_icon="🧠",
-        layout="wide"
+def initialize_evaluator(config: Dict[str, Any]) -> None:
+    """Initialize evaluator with configuration."""
+    try:
+        st.session_state.evaluator = Evaluator(
+            model_config=config,
+            validation_level=ValidationLevel[config["validation_level"]],
+            log_dir="logs"
+        )
+        st.success("Evaluator initialized successfully!")
+    except Exception as e:
+        st.error(f"Failed to initialize evaluator: {str(e)}")
+
+def render_config_form() -> None:
+    """Render the model configuration form."""
+    st.subheader("Model Configuration")
+    
+    with st.form("model_config"):
+        # Select model backend
+        backend_type = st.selectbox(
+            "Model Backend",
+            options=[b.value for b in ModelBackendType],
+            help="Select which model backend to use"
+        )
+        
+        # Validation level
+        validation_level = st.selectbox(
+            "Validation Level",
+            options=[level.name for level in ValidationLevel],
+            help="Select how strict the input/output validation should be"
+        )
+        
+        # Backend-specific configuration
+        st.subheader(f"{backend_type} Configuration")
+        
+        config = {"backend_type": backend_type, "validation_level": validation_level}
+        
+        if backend_type == ModelBackendType.OPENAI.value:
+            config["config"] = {
+                "api_key": st.text_input("OpenAI API Key", type="password"),
+                "model": st.selectbox(
+                    "Model",
+                    options=["gpt-4", "gpt-4-32k", "gpt-3.5-turbo", "gpt-3.5-turbo-16k"]
+                ),
+                "organization": st.text_input("Organization ID (optional)")
+            }
+            
+        elif backend_type == ModelBackendType.ANTHROPIC.value:
+            config["config"] = {
+                "api_key": st.text_input("Anthropic API Key", type="password"),
+                "model": st.selectbox(
+                    "Model",
+                    options=["claude-2", "claude-instant-1", "claude-1", "claude-1-100k"]
+                )
+            }
+            
+        elif backend_type == ModelBackendType.HUGGINGFACE.value:
+            config["config"] = {
+                "model_name": st.text_input("Model Name/Path"),
+                "device": st.selectbox("Device", options=["cpu", "cuda", "mps"]),
+                "load_in_8bit": st.checkbox("Load in 8-bit mode"),
+                "torch_dtype": st.selectbox(
+                    "Model Dtype",
+                    options=["float32", "float16", "bfloat16"]
+                ),
+                "use_auth_token": st.text_input("HuggingFace Token (optional)", type="password")
+            }
+            
+        elif backend_type == ModelBackendType.CUSTOM.value:
+            st.info("Custom backend selected. Please implement your model configuration.")
+            config["config"] = {}
+            
+        elif backend_type == ModelBackendType.MOCK.value:
+            config["config"] = {
+                "delay": st.slider("Artificial Delay (seconds)", 0.0, 5.0, 0.1),
+                "error_rate": st.slider("Error Rate", 0.0, 1.0, 0.0)
+            }
+        
+        if st.form_submit_button("Initialize Evaluator"):
+            initialize_evaluator(config)
+
+def render_evaluation_interface() -> None:
+    """Render the evaluation interface."""
+    st.subheader("Evaluation")
+    
+    # Input methods
+    input_method = st.radio(
+        "Input Method",
+        options=["Single Prompt", "Batch from YAML"],
+        horizontal=True
     )
     
-    initialize_session_state()
+    if input_method == "Single Prompt":
+        prompt = st.text_area("Enter Prompt", value=st.session_state.current_prompt)
+        if st.button("Evaluate"):
+            if not prompt:
+                st.warning("Please enter a prompt")
+            else:
+                with st.spinner("Evaluating..."):
+                    result = st.session_state.evaluator.evaluate_prompt(prompt)
+                    st.session_state.results.append(result)
+                    st.session_state.current_prompt = prompt
+                    
+    else:  # Batch from YAML
+        uploaded_file = st.file_uploader("Upload Prompts YAML", type="yaml")
+        if uploaded_file and st.button("Run Batch Evaluation"):
+            with st.spinner("Loading prompts..."):
+                prompts = yaml.safe_load(uploaded_file)["prompts"]
+            
+            progress_bar = st.progress(0)
+            for i, prompt in enumerate(prompts):
+                result = st.session_state.evaluator.evaluate_prompt(prompt)
+                st.session_state.results.append(result)
+                progress_bar.progress((i + 1) / len(prompts))
+            
+            st.success(f"Evaluated {len(prompts)} prompts")
+
+def render_results() -> None:
+    """Render evaluation results and visualizations."""
+    if not st.session_state.results:
+        st.info("No evaluation results yet")
+        return
     
-    # Title and description
-    st.title("🧠 Mental Health LLM Evaluator")
-    st.markdown("""
-        Evaluate LLM responses for safety, clinical appropriateness, and empathy
-        in mental health contexts.
-    """)
+    st.subheader("Results")
     
-    # Display error tracking in sidebar
-    display_error_tracking()
+    # Summary metrics
+    col1, col2, col3 = st.columns(3)
     
-    # Main interface
-    try:
-        # Load prompt bank
-        prompt_file = st.file_uploader(
-            "Upload Prompt Bank (YAML)",
-            type="yaml",
-            help="Select a YAML file containing evaluation prompts"
+    with col1:
+        st.metric(
+            "Total Evaluations",
+            len(st.session_state.results)
         )
-        
-        if prompt_file:
-            try:
-                prompts = load_prompts(prompt_file)
-                st.success(f"✅ Loaded {len(prompts)} prompts")
-                
-                # Log successful prompt load
-                log_manager.log_audit("load_prompts", {
-                    "file": prompt_file.name,
-                    "prompt_count": len(prompts)
-                })
-                
-                # Prompt selection
-                selected_prompt = st.selectbox(
-                    "Select Prompt",
-                    prompts,
-                    format_func=lambda p: f"{p.id}: {p.category} - {p.prompt[:100]}..."
-                )
-                
-                # Validation level selection
-                validation_level = st.select_slider(
-                    "Validation Level",
-                    options=[v for v in ValidationLevel],
-                    value=ValidationLevel.STANDARD,
-                    format_func=lambda x: x.value.title()
-                )
-                
-                # Update current evaluation state
-                if selected_prompt != st.session_state.current_prompt:
-                    st.session_state.current_prompt = selected_prompt
-                    try:
-                        # Generate and evaluate model response
-                        model_response = query_model(selected_prompt.prompt)
-                        st.session_state.auto_evaluation = st.session_state.evaluator.evaluate_response(
-                            selected_prompt,
-                            model_response,
-                            validation_level
-                        )
-                    except RateLimitExceeded as e:
-                        st.error(f"⚠️ Rate limit exceeded: {str(e)}")
-                        st.info("Please wait for rate limits to reset before continuing.")
-                        st.session_state.auto_evaluation = None
-                    except ValidationError as e:
-                        st.error(f"❌ Validation failed: {str(e)}")
-                        st.session_state.auto_evaluation = None
-                    except ModelError as e:
-                        st.error(f"🤖 Model error: {str(e)}")
-                        st.session_state.auto_evaluation = None
-                    except SafetyError as e:
-                        st.error(f"⚠️ Safety check failed: {str(e)}")
-                        st.session_state.auto_evaluation = None
-                    except Exception as e:
-                        st.error(f"❌ Unexpected error: {str(e)}")
-                        st.session_state.auto_evaluation = None
-                
-            except Exception as e:
-                log_manager.log_error(
-                    SystemError(f"Failed to load prompts: {str(e)}"),
-                    {"file": prompt_file.name}
-                )
-                st.error(f"Error loading prompts: {str(e)}")
-        
-        # Display current evaluation
-        if st.session_state.auto_evaluation:
-            current_evaluation = st.session_state.auto_evaluation
-            
-            # Display prompt details
-            st.header("Prompt Details")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown(f"**Category:** {current_evaluation.prompt_entry.category}")
-                st.markdown(f"**ID:** {current_evaluation.prompt_entry.id}")
-            with col2:
-                st.markdown(f"**Subcategory:** {current_evaluation.prompt_entry.subcategory}")
-            
-            st.markdown("**Prompt:**")
-            st.markdown(f">{current_evaluation.prompt_entry.prompt}")
-            
-            if current_evaluation.prompt_entry.context:
-                with st.expander("Show Context"):
-                    st.markdown(current_evaluation.prompt_entry.context)
-            
-            # Display model response
-            st.header("Model Response")
-            st.markdown(current_evaluation.model_response)
-            
-            # Display red flags
-            if current_evaluation.detected_red_flags:
-                st.error("⚠️ Red Flags Detected:")
-                for flag in current_evaluation.detected_red_flags:
-                    severity = get_severity(flag)
-                    st.markdown(f"- **{severity.upper()}:** {flag}")
-            
-            # Display scores with manual adjustment
-            st.header("Evaluation Scores")
-            
-            manual_scores = {}
-            score_valid = True
-            
-            for dimension, score in current_evaluation.scores.items():
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    manual_scores[dimension] = st.slider(
-                        dimension.title(),
-                        min_value=0.0,
-                        max_value=1.0,
-                        value=float(score),
-                        step=0.1,
-                        format="%.1f"
-                    )
-                with col2:
-                    if manual_scores[dimension] != score:
-                        st.markdown("*(Modified)*")
-            
-            try:
-                score_validation = validate_scores(manual_scores)
-                if not score_validation.is_valid:
-                    st.error(f"❌ Invalid scores: {'; '.join(score_validation.errors)}")
-                    score_valid = False
-                elif score_validation.warnings:
-                    for warning in score_validation.warnings:
-                        st.warning(f"⚠️ {warning}")
-            except Exception as e:
-                log_manager.log_error(e, {"stage": "score_validation"})
-                st.error(f"Score validation error: {str(e)}")
-                score_valid = False
-            
-            # Review and feedback
-            st.header("Review")
-            justification = st.text_area(
-                "Justification",
-                current_evaluation.justification,
-                height=100,
-                help="Explanation for the evaluation scores"
-            )
-            
-            feedback = st.text_area(
-                "Additional Feedback",
-                "",
-                height=100,
-                placeholder="Add any additional observations, concerns, or suggestions..."
-            )
-            
-            # Submit evaluation
-            if st.button("✅ Submit Evaluation", type="primary", disabled=not score_valid):
-                try:
-                    # Create modified evaluation result
-                    modified_evaluation = EvaluationResult(
-                        prompt_entry=current_evaluation.prompt_entry,
-                        model_response=current_evaluation.model_response,
-                        detected_red_flags=current_evaluation.detected_red_flags,
-                        scores=manual_scores,
-                        dimension_scores=current_evaluation.dimension_scores,
-                        justification=justification,
-                        meets_expected_behaviors=current_evaluation.meets_expected_behaviors,
-                        total_score=sum(
-                            score * weight for score, weight in zip(
-                                manual_scores.values(),
-                                [0.3, 0.25, 0.2, 0.15, 0.1]  # Dimension weights
-                            )
-                        ),
-                        validation_warnings=current_evaluation.validation_warnings
-                    )
-                    
-                    # Check rate limit before adding evaluation
-                    st.session_state.evaluator.rate_limiter.try_acquire(LimitType.PROMPT)
-                    st.session_state.evaluations.append(modified_evaluation)
-                    
-                    # Log successful submission
-                    log_manager.log_audit("evaluation_submitted", {
-                        "prompt_id": modified_evaluation.prompt_entry.id,
-                        "total_score": modified_evaluation.total_score,
-                        "modified": any(
-                            manual_scores[k] != current_evaluation.scores[k]
-                            for k in manual_scores
-                        )
-                    })
-                    
-                    st.success("✅ Evaluation submitted successfully!")
-                    
-                except RateLimitExceeded as e:
-                    st.error(f"⚠️ Rate limit exceeded: {str(e)}")
-                    st.info("Please wait for rate limits to reset before submitting more evaluations.")
-                except Exception as e:
-                    log_manager.log_error(e, {"stage": "submission"})
-                    st.error(f"Error submitting evaluation: {str(e)}")
     
-    except Exception as e:
-        log_manager.log_error(
-            SystemError(f"Application error: {str(e)}"),
-            {"location": "main"}
+    with col2:
+        success_rate = sum(1 for r in st.session_state.results if not r.error) / len(st.session_state.results)
+        st.metric(
+            "Success Rate",
+            f"{success_rate:.1%}"
         )
-        st.error(f"❌ Application error: {str(e)}")
-        st.error("Please refresh the page and try again.")
+    
+    with col3:
+        avg_score = sum(
+            sum(r.scores.values()) / len(r.scores)
+            for r in st.session_state.results
+            if r.scores
+        ) / len(st.session_state.results) if st.session_state.results else 0
+        st.metric(
+            "Average Score",
+            f"{avg_score:.2f}"
+        )
+    
+    # Results table
+    results_df = pd.DataFrame([
+        {
+            "Prompt": r.prompt,
+            "Response": r.response,
+            "Red Flags": ", ".join(r.red_flags),
+            "Scores": json.dumps(r.scores),
+            "Error": r.error or "None",
+            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        for r in st.session_state.results
+    ])
+    
+    st.dataframe(
+        results_df,
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    # Score distribution plot
+    if any(r.scores for r in st.session_state.results):
+        scores_df = pd.DataFrame([
+            {
+                "Category": category,
+                "Score": score,
+                "Prompt": r.prompt[:50] + "..."
+            }
+            for r in st.session_state.results
+            if r.scores
+            for category, score in r.scores.items()
+        ])
+        
+        fig = px.box(
+            scores_df,
+            x="Category",
+            y="Score",
+            points="all",
+            hover_data=["Prompt"]
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Export results
+    if st.button("Export Results"):
+        results_df.to_csv("evaluation_results.csv", index=False)
+        st.success("Results exported to evaluation_results.csv")
+
+def main():
+    """Main application entry point."""
+    st.title("Mental Health LLM Evaluator")
+    
+    # Configuration section
+    with st.expander("Model Configuration", expanded=not st.session_state.evaluator):
+        render_config_form()
+    
+    # Only show evaluation interface if evaluator is initialized
+    if st.session_state.evaluator:
+        render_evaluation_interface()
+        render_results()
+    else:
+        st.warning("Please configure and initialize the evaluator to begin")
 
 if __name__ == "__main__":
     main()
