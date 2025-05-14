@@ -319,7 +319,7 @@ with flags_col:
 st.header("Evaluation")
 score_cols = st.columns(len(current_evaluation.scores))
 
-manual_scores = {}
+        manual_scores = {}
 for col, (dimension, score) in zip(score_cols, current_evaluation.scores.items()):
     with col:
         st.subheader(dimension.capitalize())
@@ -430,7 +430,7 @@ if st.session_state.evaluations:
             **e.scores,
             "red_flags": ",".join(e.detected_red_flags),
             "justification": e.justification,
-            "feedback": feedback
+                "feedback": feedback
         } for e in st.session_state.evaluations])
         
         csv_data = export_df.to_csv(index=False).encode("utf-8")
