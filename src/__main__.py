@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-# __main__.py — Modular entry point for mental_health_llm_eval
+# __main__.py — Unified entry point for all evaluation modes
 #
-# This file enables multi-mode execution of the toolkit using:
-#   python -m mental_health_llm_eval [--cli | --ui | --validate | --version]
-#
-# It's intended as a convenience layer for common developer or evaluator workflows.
+# Supports multiple execution paths:
+#   --cli       → batch evaluator
+#   --ui        → launch Streamlit app
+#   --validate  → check YAML formats
+#   --version   → print version number
 
 import sys
 import argparse
-import os
 import subprocess
 from src.cli import main as cli_main
 from src.evaluator import load_prompts
@@ -17,47 +17,38 @@ from src.scorer import load_rubric
 TOOL_VERSION = "0.1.0"
 
 def launch_ui():
-    """
-    Launches the Streamlit-based UI app.
-    """
-    print("🔄 Launching Streamlit interface...")
+    """Starts the Streamlit app."""
+    print("Launching UI...")
     subprocess.run(["streamlit", "run", "app/streamlit_app.py"])
 
-
 def validate_inputs(prompt_path, rubric_path):
-    """
-    Validates prompt bank and rubric YAML files.
-    """
+    """Checks if prompt and rubric YAML files load correctly."""
     try:
         load_prompts(prompt_path)
-        print(f"✅ Prompts file at '{prompt_path}' loaded successfully.")
+        print(f"✅ Prompts OK: {prompt_path}")
     except Exception as e:
-        print(f"❌ Error in prompts file: {e}")
-        return
+        print(f"❌ Prompts error: {e}")
 
     try:
         load_rubric(rubric_path)
-        print(f"✅ Rubric file at '{rubric_path}' loaded successfully.")
+        print(f"✅ Rubric OK: {rubric_path}")
     except Exception as e:
-        print(f"❌ Error in rubric file: {e}")
-
+        print(f"❌ Rubric error: {e}")
 
 def main():
-    """
-    Dispatches command-line options to the appropriate run mode.
-    """
+    """Main command-line router."""
     parser = argparse.ArgumentParser(description="Mental Health LLM Eval Toolkit")
-    parser.add_argument("--cli", action="store_true", help="Run CLI batch evaluator (default)")
+    parser.add_argument("--cli", action="store_true", help="Run CLI batch evaluator")
     parser.add_argument("--ui", action="store_true", help="Launch Streamlit UI")
-    parser.add_argument("--validate", action="store_true", help="Validate prompt and rubric files")
-    parser.add_argument("--version", action="store_true", help="Print version and exit")
-    parser.add_argument("--prompts", help="Path to prompt_bank.yaml (used by --cli or --validate)")
-    parser.add_argument("--rubric", help="Path to scoring_rubric.yaml (used by --cli or --validate)")
+    parser.add_argument("--validate", action="store_true", help="Validate prompt/rubric YAMLs")
+    parser.add_argument("--version", action="store_true", help="Print version")
+    parser.add_argument("--prompts", help="Path to prompt_bank.yaml")
+    parser.add_argument("--rubric", help="Path to scoring_rubric.yaml")
 
     args = parser.parse_args()
 
     if args.version:
-        print(f"🧠 mental_health_llm_eval version {TOOL_VERSION}")
+        print(f"Mental Health Eval v{TOOL_VERSION}")
         return
 
     if args.ui:
@@ -66,17 +57,19 @@ def main():
 
     if args.validate:
         if not args.prompts or not args.rubric:
-            print("⚠️ Please provide both --prompts and --rubric to validate.")
-            return
-        validate_inputs(args.prompts, args.rubric)
+            print("⚠️ Provide both --prompts and --rubric for validation.")
+        else:
+            validate_inputs(args.prompts, args.rubric)
         return
 
-    # Default: run CLI evaluator
-    if args.prompts and args.rubric:
-        cli_main.main()
-    else:
-        print("⚠️ Please provide --prompts and --rubric to run the CLI evaluator.")
+    if args.cli:
+        if not args.prompts or not args.rubric:
+            print("⚠️ Provide --prompts and --rubric for CLI evaluation.")
+        else:
+            cli_main.main()
+        return
 
+    print("📌 Use --cli, --ui, --validate, or --version to run this tool.")
 
 if __name__ == "__main__":
     main()
