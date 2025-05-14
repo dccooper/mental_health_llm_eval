@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
 
-# streamlit_app.py — Human-in-the-loop review interface
-#
-# This app provides a browser-based interface for reviewing LLM responses
-# to mental health prompts. It allows human evaluators to adjust scores,
-# write feedback, and export results. Useful for quality control and red-teaming.
+"""
+Mental Health LLM Evaluator UI
+=============================
+
+This module provides a Streamlit-based web interface for:
+1. Loading and managing prompt banks
+2. Running real-time LLM evaluations
+3. Manual review and score adjustment
+4. Results visualization and export
+5. Session statistics tracking
+
+The interface is designed for mental health professionals and researchers
+to evaluate LLM responses for safety, clinical appropriateness, and empathy.
+"""
 
 import streamlit as st
 import pandas as pd
@@ -23,21 +32,24 @@ from src.evaluator import (
 from src.models import query_model
 from src.red_flags import check_red_flags, get_severity
 
-# Custom color palette
+# Custom color palette for consistent UI theming
 COLORS = {
-    'burgundy': '#780000',
-    'bright_red': '#c1121f',
-    'cream': '#fdf0d5',
-    'dark_blue': '#003049',
-    'light_blue': '#669bbc'
+    'burgundy': '#780000',  # Used for critical alerts
+    'bright_red': '#c1121f',  # Used for warnings
+    'cream': '#fdf0d5',    # Primary background
+    'dark_blue': '#003049', # Primary text and headers
+    'light_blue': '#669bbc' # Interactive elements
 }
 
-# Custom CSS
+# Apply custom styling
 st.markdown(f"""
     <style>
+    /* Main app styling */
     .stApp {{
         background-color: {COLORS['cream']};
     }}
+    
+    /* Interactive elements */
     .stButton > button {{
         background-color: {COLORS['dark_blue']};
         color: white;
@@ -45,92 +57,111 @@ st.markdown(f"""
     .stButton > button:hover {{
         background-color: {COLORS['light_blue']};
     }}
-    .stTextInput > div > div > input {{
-        background-color: white;
-    }}
-    .stTextArea > div > div > textarea {{
-        background-color: white;
-    }}
+    
+    /* Form inputs */
+    .stTextInput > div > div > input,
+    .stTextArea > div > div > textarea,
     .stSelectbox > div > div > select {{
         background-color: white;
     }}
+    
+    /* Typography */
     h1, h2, h3 {{
         color: {COLORS['dark_blue']};
     }}
+    
+    /* Alerts and notifications */
     .stAlert {{
         background-color: white;
     }}
     </style>
 """, unsafe_allow_html=True)
 
-# Page config
+# Page configuration
 st.set_page_config(
     page_title="Mental Health LLM Evaluator",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Initialize session state
+# Initialize session state variables
 if "evaluations" not in st.session_state:
-    st.session_state.evaluations = []
+    st.session_state.evaluations = []  # Stores all completed evaluations
 if "current_prompt" not in st.session_state:
-    st.session_state.current_prompt = None
+    st.session_state.current_prompt = None  # Currently selected prompt
 if "auto_evaluation" not in st.session_state:
-    st.session_state.auto_evaluation = None
+    st.session_state.auto_evaluation = None  # Current automated evaluation result
 
-# Sidebar for configuration and navigation
+# Sidebar configuration
 with st.sidebar:
     st.title("🧠 Configuration")
     
-    # File upload
-    prompt_file = st.file_uploader("📄 Upload Prompt Bank", type=["yaml"])
+    # Prompt bank management
+    prompt_file = st.file_uploader(
+        "📄 Upload Prompt Bank",
+        type=["yaml"],
+        help="Upload a YAML file containing evaluation prompts"
+    )
     
     if prompt_file:
-        prompts = load_prompts(prompt_file)
-        categories = sorted(set(p.category for p in prompts))
+        # Load and organize prompts
+        loaded_prompts = load_prompts(prompt_file)
+        available_categories = sorted(set(p.category for p in loaded_prompts))
         
-        # Category filter
+        # Category filtering
         selected_category = st.selectbox(
             "🏷️ Filter by Category",
-            ["All"] + categories
+            ["All"] + available_categories,
+            help="Filter prompts by their category"
         )
         
         # Prompt selection
         filtered_prompts = [
-            p for p in prompts
+            p for p in loaded_prompts
             if selected_category == "All" or p.category == selected_category
         ]
         
         selected_prompt = st.selectbox(
             "📝 Select Prompt",
             filtered_prompts,
-            format_func=lambda p: f"{p.id}: {p.prompt[:50]}..."
+            format_func=lambda p: f"{p.id}: {p.prompt[:50]}...",
+            help="Choose a prompt to evaluate"
         )
         
+        # Update current evaluation state
         if selected_prompt != st.session_state.current_prompt:
             st.session_state.current_prompt = selected_prompt
-            # Get model response and evaluation
+            # Generate and evaluate model response
             model_response = query_model(selected_prompt.prompt)
             st.session_state.auto_evaluation = evaluate_response(
                 selected_prompt, model_response
             )
     
-    # Stats summary
+    # Session statistics display
     if st.session_state.evaluations:
         st.divider()
         st.subheader("📊 Session Stats")
-        st.metric("Prompts Evaluated", len(st.session_state.evaluations))
         
-        avg_score = sum(e.total_score for e in st.session_state.evaluations) / len(st.session_state.evaluations)
-        st.metric("Average Score", f"{avg_score:.2f}")
-        
-        critical_count = sum(
+        # Calculate key metrics
+        total_evaluations = len(st.session_state.evaluations)
+        average_score = sum(e.total_score for e in st.session_state.evaluations) / total_evaluations
+        critical_issues = sum(
             1 for e in st.session_state.evaluations
             if any(f for f in e.detected_red_flags if get_severity([f]) == "critical")
         )
-        st.metric("Critical Issues", critical_count, delta=-critical_count, delta_color="inverse")
+        
+        # Display metrics
+        st.metric("Prompts Evaluated", total_evaluations)
+        st.metric("Average Score", f"{average_score:.2f}")
+        st.metric(
+            "Critical Issues",
+            critical_issues,
+            delta=-critical_issues,
+            delta_color="inverse",
+            help="Number of responses with critical safety concerns"
+        )
 
-# Main content
+# Main content area
 st.title("Mental Health LLM Evaluator")
 
 if not prompt_file:
@@ -141,54 +172,65 @@ if not st.session_state.current_prompt or not st.session_state.auto_evaluation:
     st.warning("⚠️ Please select a prompt to evaluate.")
     st.stop()
 
-# Display current prompt context
-prompt = st.session_state.current_prompt
-eval_result = st.session_state.auto_evaluation
+# Display current evaluation context
+current_prompt = st.session_state.current_prompt
+current_evaluation = st.session_state.auto_evaluation
 
 st.header("Prompt Analysis")
-col1, col2 = st.columns(2)
+context_col, behavior_col = st.columns(2)
 
-with col1:
+with context_col:
     st.subheader("Context")
-    st.info(prompt.context)
+    st.info(current_prompt.context)
     
     st.subheader("Expected Behaviors")
-    for behavior in prompt.expected_behaviors:
-        st.checkbox(behavior, value=behavior in eval_result.meets_expected_behaviors, disabled=True)
+    for behavior in current_prompt.expected_behaviors:
+        st.checkbox(
+            behavior,
+            value=behavior in current_evaluation.meets_expected_behaviors,
+            disabled=True,
+            help="Behaviors the model response should exhibit"
+        )
 
-with col2:
+with behavior_col:
     st.subheader("Red Flags to Watch")
-    for flag in prompt.red_flags:
-        st.checkbox(flag, value=flag in eval_result.detected_red_flags, disabled=True)
+    for flag in current_prompt.red_flags:
+        st.checkbox(
+            flag,
+            value=flag in current_evaluation.detected_red_flags,
+            disabled=True,
+            help="Potential safety concerns to monitor"
+        )
 
-# Model response and evaluation
+# Model response analysis
 st.header("Model Response")
 response_col, flags_col = st.columns([2, 1])
 
 with response_col:
     st.text_area(
         "Response Text",
-        eval_result.model_response,
+        current_evaluation.model_response,
         height=200,
-        disabled=True
+        disabled=True,
+        help="The LLM's response to the prompt"
     )
 
 with flags_col:
     st.subheader("🚩 Detected Issues")
-    if eval_result.detected_red_flags:
-        for flag in eval_result.detected_red_flags:
+    if current_evaluation.detected_red_flags:
+        for flag in current_evaluation.detected_red_flags:
             severity = get_severity([flag])
-            color = "red" if severity == "critical" else "orange"
-            st.markdown(f":{color}[⚠️ {flag}]")
+            flag_color = "red" if severity == "critical" else "orange"
+            st.markdown(f":{flag_color}[⚠️ {flag}]")
     else:
         st.success("No red flags detected")
 
 # Scoring interface
 st.header("Evaluation")
-score_cols = st.columns(len(eval_result.scores))
+score_cols = st.columns(len(current_evaluation.scores))
 
 manual_scores = {}
-for col, (dimension, score) in zip(score_cols, eval_result.scores.items()):
+for col, (dimension, score) in zip(score_cols, current_evaluation.scores.items()):
     with col:
         st.subheader(dimension.capitalize())
         manual_scores[dimension] = st.slider(
@@ -200,13 +242,13 @@ for col, (dimension, score) in zip(score_cols, eval_result.scores.items()):
             help=f"Adjust the {dimension} score if needed"
         )
 
-# Justification and feedback
+# Review and feedback
 st.header("Review")
 justification = st.text_area(
     "Justification",
-    eval_result.justification,
+    current_evaluation.justification,
     height=100,
-    help="Edit the automated justification if needed"
+    help="Explanation for the evaluation scores"
 )
 
 feedback = st.text_area(
@@ -218,72 +260,53 @@ feedback = st.text_area(
 
 # Submit evaluation
 if st.button("✅ Submit Evaluation", type="primary"):
-    # Create modified evaluation result
-    modified_result = EvaluationResult(
-        prompt_entry=eval_result.prompt_entry,
-        model_response=eval_result.model_response,
-        detected_red_flags=eval_result.detected_red_flags,
+    # Create modified evaluation result with manual adjustments
+    modified_evaluation = EvaluationResult(
+        prompt_entry=current_evaluation.prompt_entry,
+        model_response=current_evaluation.model_response,
+        detected_red_flags=current_evaluation.detected_red_flags,
         scores=manual_scores,
-        dimension_scores=eval_result.dimension_scores,
+        dimension_scores=current_evaluation.dimension_scores,
         justification=justification,
-        meets_expected_behaviors=eval_result.meets_expected_behaviors,
-        total_score=sum(score * weight for score, weight in zip(
-            manual_scores.values(),
-            [0.3, 0.25, 0.2, 0.15, 0.1]  # weights for safety, clinical, empathy, ethics, cultural
-        ))
+        meets_expected_behaviors=current_evaluation.meets_expected_behaviors,
+        total_score=sum(
+            score * weight for score, weight in zip(
+                manual_scores.values(),
+                [0.3, 0.25, 0.2, 0.15, 0.1]  # Dimension weights
+            )
+        )
     )
     
-    st.session_state.evaluations.append(modified_result)
+    st.session_state.evaluations.append(modified_evaluation)
     st.success("✅ Evaluation submitted successfully!")
-
-# Update the plotly theme to match our color scheme
-def create_score_plot(df):
-    fig = px.box(
-        df,
-        x="Dimension",
-        y="Score",
-        title="Score Distribution by Dimension",
-        points="all"
-    )
-    fig.update_layout(
-        plot_bgcolor=COLORS['cream'],
-        paper_bgcolor=COLORS['cream'],
-        font_color=COLORS['dark_blue'],
-        title_font_color=COLORS['dark_blue']
-    )
-    fig.update_traces(
-        marker_color=COLORS['light_blue'],
-        boxpoints='all'
-    )
-    return fig
 
 # Results visualization
 if st.session_state.evaluations:
     st.header("Session Results")
     
-    # Prepare data for visualization
-    eval_data = []
+    # Prepare visualization data
+    evaluation_data = []
     for eval_result in st.session_state.evaluations:
         for dimension, score in eval_result.scores.items():
-            eval_data.append({
+            evaluation_data.append({
                 "Prompt ID": eval_result.prompt_entry.id,
                 "Dimension": dimension.capitalize(),
                 "Score": score
             })
     
-    df = pd.DataFrame(eval_data)
+    results_df = pd.DataFrame(evaluation_data)
     
-    # Plot scores using our custom function
-    fig = create_score_plot(df)
+    # Create and display score distribution plot
+    fig = create_score_plot(results_df)
     st.plotly_chart(fig, use_container_width=True)
     
     # Export options
     st.subheader("Export Results")
-    col1, col2 = st.columns(2)
+    export_col1, export_col2 = st.columns(2)
     
-    with col1:
-        # Export as CSV
-        df_export = pd.DataFrame([{
+    with export_col1:
+        # Prepare CSV export
+        export_df = pd.DataFrame([{
             "timestamp": datetime.now().isoformat(),
             "prompt_id": e.prompt_entry.id,
             "category": e.prompt_entry.category,
@@ -296,16 +319,17 @@ if st.session_state.evaluations:
             "feedback": feedback
         } for e in st.session_state.evaluations])
         
-        csv = df_export.to_csv(index=False).encode("utf-8")
+        csv_data = export_df.to_csv(index=False).encode("utf-8")
         st.download_button(
             "📥 Download CSV",
-            csv,
+            csv_data,
             "mental_health_llm_evaluations.csv",
-            "text/csv"
+            "text/csv",
+            help="Export results in CSV format"
         )
     
-    with col2:
-        # Export as JSON
+    with export_col2:
+        # Prepare JSON export
         json_data = json.dumps([{
             "timestamp": datetime.now().isoformat(),
             "prompt": asdict(e.prompt_entry),
@@ -324,5 +348,6 @@ if st.session_state.evaluations:
             "📥 Download JSON",
             json_data,
             "mental_health_llm_evaluations.json",
-            "application/json"
+            "application/json",
+            help="Export results in JSON format"
         )
