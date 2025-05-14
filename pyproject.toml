@@ -1,0 +1,99 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mental_health_llm_eval"
+version = "0.1.0"
+description = "Framework for evaluating LLM responses in mental health contexts"
+readme = "README.md"
+authors = [{ name = "Your Name", email = "your.email@example.com" }]
+license = { file = "LICENSE" }
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Healthcare Industry",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Healthcare",
+]
+keywords = ["llm", "mental health", "evaluation", "nlp", "machine learning"]
+requires-python = ">=3.8"
+dynamic = ["dependencies"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "mypy>=1.0.0",
+    "flake8>=6.0.0",
+]
+docs = [
+    "sphinx>=7.0.0",
+    "sphinx-rtd-theme>=1.3.0",
+    "sphinx-autodoc-typehints>=1.24.0",
+]
+ui = [
+    "streamlit>=1.29.0",
+    "plotly>=5.18.0",
+]
+openai = ["openai>=1.0.0"]
+anthropic = ["anthropic>=0.8.1"]
+huggingface = [
+    "transformers>=4.36.0",
+    "torch>=2.1.0",
+    "accelerate>=0.25.0",
+    "bitsandbytes>=0.41.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/mental_health_llm_eval"
+Documentation = "https://mental-health-llm-eval.readthedocs.io/"
+Repository = "https://github.com/yourusername/mental_health_llm_eval.git"
+Issues = "https://github.com/yourusername/mental_health_llm_eval/issues"
+
+[project.scripts]
+mh-llm-eval = "mental_health_llm_eval.cli:main"
+mh-llm-eval-ui = "mental_health_llm_eval.ui:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.black]
+line-length = 88
+target-version = ["py38"]
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --cov=mental_health_llm_eval"
+testpaths = ["tests"] 
