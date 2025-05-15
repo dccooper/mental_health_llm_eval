@@ -1,12 +1,12 @@
 title: Mental Health LLM Evaluation Framework
 description: Framework for evaluating LLM responses in mental health contexts
-theme: jekyll-theme-minimal
+remote_theme: pages-themes/minimal@v0.2.0
 show_downloads: true
-google_analytics:
-markdown: kramdown
-kramdown:
-  syntax_highlighter: rouge
+
+# Build settings
+markdown: GFM
 plugins:
+  - jekyll-remote-theme
   - jekyll-feed
   - jekyll-seo-tag
   - jekyll-sitemap
