@@ -12,9 +12,9 @@ plugins:
   - jekyll-sitemap
 
 # GitHub Pages settings
-repository: yourusername/mental_health_llm_eval
+repository: dccooper/mental_health_llm_eval
 baseurl: "/mental_health_llm_eval"
-url: "https://yourusername.github.io"
+url: "https://dccooper.github.io"
 
 # Navigation
 nav:
