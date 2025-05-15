@@ -82,9 +82,9 @@ setup(
     # Define command-line tools the user can run after installing this package
     entry_points={
         'console_scripts': [
-            # This means a user can run `mh-llm-eval` from the terminal and it will call mental_health_llm_eval.cli:main
-            'mh-llm-eval=mental_health_llm_eval.cli:main',
-            'mh-llm-eval-ui=mental_health_llm_eval.ui:main',
+            # Updated entry points to point to the correct locations
+            'mh-llm-eval=cli.main:main',
+            'mh-llm-eval-ui=app.streamlit_app:main',
         ],
     },
 

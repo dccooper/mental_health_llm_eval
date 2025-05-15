@@ -14,7 +14,7 @@ The module is thread-safe and can be used across different components of the sys
 import time
 import threading
 from dataclasses import dataclass
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple, Any
 from datetime import datetime, timedelta
 from enum import Enum
 

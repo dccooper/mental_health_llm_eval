@@ -16,6 +16,14 @@ to evaluate LLM responses for safety, clinical appropriateness, and empathy.
 """
 
 import streamlit as st
+
+# Page configuration
+st.set_page_config(
+    page_title="Mental Health LLM Evaluator",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 import pandas as pd
 import json
 from typing import Dict, List
@@ -29,15 +37,15 @@ from src.evaluator import (
     PromptEntry,
     EvaluationResult,
     load_prompts,
-    evaluate_response,
-    generate_report
+    generate_report,
+    Evaluator,
+    generate_csv_template,
+    csv_to_yaml
 )
 from src.models import query_model
 from src.red_flags import check_red_flags, get_severity
 from src.validation import ValidationLevel
-from src.evaluator import EvaluationError
 from src.validation import validate_scores
-from src.evaluator import Evaluator
 from src.rate_limiter import RateLimitExceeded, LimitType
 from src.logging_handler import (
     log_manager,
@@ -84,22 +92,23 @@ st.markdown(f"""
     
     /* Typography */
     h1, h2, h3 {{
-        color: {COLORS['dark_blue']};
+        color: black;
     }}
     
     /* Alerts and notifications */
     .stAlert {{
         background-color: white;
     }}
+
+    /* Info messages */
+    .stInfo {{
+        color: black !important;
+    }}
+    .stInfo > div {{
+        color: black !important;
+    }}
     </style>
 """, unsafe_allow_html=True)
-
-# Page configuration
-st.set_page_config(
-    page_title="Mental Health LLM Evaluator",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 # Initialize session state variables
 if "evaluations" not in st.session_state:
@@ -154,16 +163,31 @@ with st.sidebar:
     validation_level = ValidationLevel(validation_level)
     
     # Prompt bank management
-    prompt_file = st.file_uploader(
-        "📄 Upload Prompt Bank",
-        type=["yaml"],
-        help="Upload a YAML file containing evaluation prompts"
+    csv_template = generate_csv_template()
+    st.download_button(
+        "📥 Download CSV Template",
+        csv_template,
+        "prompt_template.csv",
+        "text/csv",
+        help="Download a CSV template with example prompts"
     )
-    
-    if prompt_file:
+
+    st.write("")  # Add a small space
+
+    uploaded_file = st.file_uploader(
+        "📄 Upload Prompts File",
+        type=["yaml", "csv"],
+        help="Upload a YAML or CSV file containing evaluation prompts"
+    )
+
+    if uploaded_file:
         try:
-            # Load and organize prompts
-            loaded_prompts = load_prompts(prompt_file)
+            # Load and organize prompts based on file type
+            if uploaded_file.name.endswith('.csv'):
+                loaded_prompts = csv_to_yaml(uploaded_file)
+            else:
+                loaded_prompts = load_prompts(uploaded_file)
+            
             available_categories = sorted(set(p.category for p in loaded_prompts))
             
             # Category filtering
@@ -246,10 +270,10 @@ with st.sidebar:
             )
 
 # Main content area
-st.title("Mental Health LLM Evaluator")
+st.markdown("<h1 style='color: black;'>Mental Health LLM Evaluator</h1>", unsafe_allow_html=True)
 
-if not prompt_file:
-    st.info("👈 Please upload a prompt bank YAML file to begin evaluation.")
+if not uploaded_file:
+    st.markdown("<div style='color: black;'>👈 Please upload a prompt bank file (CSV or YAML) to begin evaluation.</div>", unsafe_allow_html=True)
     st.stop()
 
 if not st.session_state.current_prompt or not st.session_state.auto_evaluation:
@@ -319,7 +343,7 @@ with flags_col:
 st.header("Evaluation")
 score_cols = st.columns(len(current_evaluation.scores))
 
-        manual_scores = {}
+manual_scores = {}
 for col, (dimension, score) in zip(score_cols, current_evaluation.scores.items()):
     with col:
         st.subheader(dimension.capitalize())
