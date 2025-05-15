@@ -1,18 +1,16 @@
 title: Mental Health LLM Evaluation Framework
 description: Framework for evaluating LLM responses in mental health contexts
-remote_theme: pages-themes/minimal@v0.2.0
+theme: jekyll-theme-minimal
 show_downloads: true
 
 # Build settings
 markdown: GFM
 plugins:
-  - jekyll-remote-theme
   - jekyll-feed
   - jekyll-seo-tag
   - jekyll-sitemap
 
 # GitHub Pages settings
-repository: dccooper/mental_health_llm_eval
 baseurl: "/mental_health_llm_eval"
 url: "https://dccooper.github.io"
 
