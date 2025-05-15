@@ -1,5 +1,9 @@
+logs/
+venv/
+*.egg-info/
 __pycache__/
 *.pyc
 .env
 *.csv
 *.json
+.DS_Store

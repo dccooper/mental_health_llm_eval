@@ -31,26 +31,52 @@ This framework provides tools and methodologies for assessing the performance of
 - Empathy and tone analysis
 - Response validation
 - Detailed scoring rubrics
+- Customizable evaluation criteria
+- CSV-based scoring rubric templates
 
 ### Safety First
 - Input validation and sanitization
 - Rate limiting
 - Content warnings
 - Audit logging
+- Real-time red flag detection
+- Severity-based warning system
 
 ### User-Friendly Interface
 - Web-based UI for evaluations
 - Command-line interface
 - Batch processing support
 - Result visualization
+- Interactive scoring interface
+- Session statistics tracking
+- Export functionality (CSV/JSON)
+- Step-by-step guidance
 
-## Quick Links
+## Documentation
 
-- [Installation Guide](installation.md)
-- [Usage Guide](usage.md)
+### For Non-Technical Users
+- [Simple Step-by-Step Guide](simple_instructions.md) - A beginner-friendly guide for using the tool
+- [Installation for Beginners](installation.md#for-beginners) - Easy-to-follow installation instructions
+
+### Technical Documentation
+- [Installation Guide](installation.md) - Detailed setup instructions
+- [Testing Guide](testing.md) - Information about running and writing tests
+- [Prompt Format](prompt_format.md) - Guide to creating and formatting prompts
+- [Evaluator Configuration](evaluator_prompt.md) - Details about configuring the evaluator
+
+### Development
+- [Contributing Guidelines](contributing.md)
 - [API Reference](api.md)
-- [Contributing](contributing.md)
-- [GitHub Repository](https://github.com/yourusername/mental_health_llm_eval)
+- [GitHub Repository](https://github.com/dccooper/mental_health_llm_eval)
+
+## Recent Updates
+
+- Added customizable scoring rubrics via CSV templates
+- Improved UI with clear step-by-step instructions
+- Enhanced sidebar organization for better workflow
+- Added session statistics tracking
+- Improved error handling and user feedback
+- Added beginner-friendly documentation
 
 ## Disclaimer
 
