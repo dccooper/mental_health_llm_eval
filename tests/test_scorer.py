@@ -2,9 +2,9 @@
 
 # test_scorer.py — Unit tests for rubric scoring
 
-from src.scorer import apply_rubric
+from mental_health_llm_eval.scorer import apply_rubric
 import pytest
-from src.scorer import score_response, score_criterion, get_scoring_explanation
+from mental_health_llm_eval.scorer import score_response, score_criterion, get_scoring_explanation
 
 fake_rubric = {
     "scoring_rubric": {

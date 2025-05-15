@@ -4,7 +4,7 @@ Tests for the rate limiting module.
 
 import pytest
 import time
-from src.rate_limiter import (
+from mental_health_llm_eval.rate_limiter import (
     TokenBucket,
     SlidingWindowLimiter,
     RateLimiter,

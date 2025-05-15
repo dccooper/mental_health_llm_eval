@@ -3,7 +3,7 @@ Tests for the input validation and sanitization module.
 """
 
 import pytest
-from src.validation import (
+from mental_health_llm_eval.validation import (
     ValidationLevel,
     ValidationResult,
     sanitize_text,

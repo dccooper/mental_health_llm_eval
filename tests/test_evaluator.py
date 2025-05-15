@@ -5,7 +5,7 @@
 import pytest
 from dataclasses import asdict
 import yaml
-from src.evaluator import (
+from mental_health_llm_eval.evaluator import (
     PromptEntry,
     EvaluationResult,
     load_prompts,

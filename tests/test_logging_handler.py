@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 from datetime import datetime
-from src.logging_handler import (
+from mental_health_llm_eval.logging_handler import (
     LogManager,
     ErrorSeverity,
     EvalError,

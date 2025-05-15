@@ -33,21 +33,24 @@ import time
 import yaml
 import os
 
-from src.evaluator import (
+from mental_health_llm_eval.evaluator import (
     PromptEntry,
     EvaluationResult,
     load_prompts,
     generate_report,
     Evaluator,
     generate_csv_template,
-    csv_to_yaml
+    csv_to_yaml,
+    generate_scoring_rubric_template,
+    scoring_rubric_csv_to_yaml,
+    scoring_rubric_yaml_to_csv
 )
-from src.models import query_model
-from src.red_flags import check_red_flags, get_severity
-from src.validation import ValidationLevel
-from src.validation import validate_scores
-from src.rate_limiter import RateLimitExceeded, LimitType
-from src.logging_handler import (
+from mental_health_llm_eval.models import query_model
+from mental_health_llm_eval.red_flags import check_red_flags, get_severity
+from mental_health_llm_eval.validation import ValidationLevel
+from mental_health_llm_eval.validation import validate_scores
+from mental_health_llm_eval.rate_limiter import RateLimitExceeded, LimitType
+from mental_health_llm_eval.logging_handler import (
     log_manager,
     ErrorSeverity,
     ValidationError,
@@ -55,7 +58,7 @@ from src.logging_handler import (
     SafetyError,
     SystemError
 )
-from src.model_backends import ModelBackendType
+from mental_health_llm_eval.model_backends import ModelBackendType
 
 # Custom color palette for consistent UI theming
 COLORS = {
@@ -65,6 +68,59 @@ COLORS = {
     'dark_blue': '#003049', # Primary text and headers
     'light_blue': '#669bbc' # Interactive elements
 }
+
+def render_scoring_rubric_section():
+    """Render the scoring rubric configuration section."""
+    st.sidebar.subheader("📊 Scoring Rubric")
+    
+    # Download template button
+    csv_template = generate_scoring_rubric_template()
+    st.sidebar.download_button(
+        "📥 Download Rubric Template",
+        csv_template,
+        "scoring_rubric_template.csv",
+        "text/csv",
+        help="Download a CSV template with example scoring criteria"
+    )
+    
+    # Upload custom rubric
+    uploaded_rubric = st.sidebar.file_uploader(
+        "📄 Upload Custom Rubric",
+        type=["csv"],
+        key="rubric_uploader",
+        help="Upload your modified scoring rubric CSV file"
+    )
+    
+    if uploaded_rubric:
+        try:
+            # Convert CSV to YAML format
+            rubric_yaml = scoring_rubric_csv_to_yaml(uploaded_rubric)
+            
+            # Store in session state
+            st.session_state.custom_scoring_rubric = rubric_yaml
+            
+            # Show success message
+            st.sidebar.success("✅ Custom scoring rubric loaded!")
+            
+            # Display the loaded criteria
+            with st.sidebar.expander("📋 View Loaded Criteria"):
+                for criterion in rubric_yaml['scoring_rubric']['criteria']:
+                    st.markdown(f"**{criterion['name']}** (weight: {criterion['weight']})")
+                    st.markdown(f"_{criterion['description']}_")
+                    st.markdown(f"Scale: {criterion['scale']['min']} - {criterion['scale']['max']}")
+                    if 'critical_red_flag_categories' in criterion:
+                        st.markdown("Red flags: " + ", ".join(criterion['critical_red_flag_categories']))
+                    st.markdown("---")
+                
+        except Exception as e:
+            st.sidebar.error(f"Error loading scoring rubric: {str(e)}")
+            st.sidebar.info("""
+            Please ensure your CSV follows the template format:
+            - All required columns are present
+            - Weights sum to 1.0
+            - Scale values are positive integers
+            - Red flags are pipe-separated (|)
+            """)
 
 # Apply custom styling
 st.markdown(f"""
@@ -93,6 +149,11 @@ st.markdown(f"""
     /* Typography */
     h1, h2, h3 {{
         color: black;
+    }}
+    
+    /* Regular text */
+    .stMarkdown, .stText {{
+        color: black !important;
     }}
     
     /* Alerts and notifications */
@@ -269,8 +330,46 @@ with st.sidebar:
                 help="Number of responses with critical safety concerns"
             )
 
+    # Scoring rubric section
+    render_scoring_rubric_section()
+
 # Main content area
 st.markdown("<h1 style='color: black;'>Mental Health LLM Evaluator</h1>", unsafe_allow_html=True)
+
+# Add step-by-step instructions
+st.markdown("""
+### 📋 Getting Started
+
+Follow these steps to evaluate LLM responses:
+
+1. **Configure Scoring Rubric** (Optional)
+   - Download the current scoring rubric template using the sidebar
+   - Modify the criteria, weights, and scales as needed
+   - Upload your customized rubric CSV file
+
+2. **Upload Prompt Bank**
+   - Download the prompt template to see the required format
+   - Create your prompt bank in CSV or YAML format
+   - Upload your file using the sidebar uploader
+
+3. **Select Prompts**
+   - Filter prompts by category if desired
+   - Choose a specific prompt to evaluate
+   - The system will automatically generate and evaluate the LLM response
+
+4. **Review Evaluation**
+   - Check the model's response and any detected red flags
+   - Review the automated scores across all dimensions
+   - Adjust scores manually if needed
+   - Add justification and feedback
+
+5. **Submit and Export**
+   - Submit your evaluation to save it
+   - View session statistics in the sidebar
+   - Export results in CSV or JSON format when finished
+
+Need help? Check out our [documentation](https://github.com/dccooper/mental_health_llm_eval/blob/main/docs/index.md) for detailed guides.
+""")
 
 if not uploaded_file:
     st.markdown("<div style='color: black;'>👈 Please upload a prompt bank file (CSV or YAML) to begin evaluation.</div>", unsafe_allow_html=True)

@@ -3,7 +3,7 @@
 # test_red_flags.py — Unit tests for safety phrase detection
 
 import pytest
-from src.red_flags import (
+from mental_health_llm_eval.red_flags import (
     check_red_flags,
     pattern_based_check,
     llm_safety_check,

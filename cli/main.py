@@ -5,7 +5,7 @@
 import argparse
 import json
 import pandas as pd
-from src.evaluator import run_evaluation
+from mental_health_llm_eval.evaluator import run_evaluation
 
 def save_results(results, output_base: str):
     """

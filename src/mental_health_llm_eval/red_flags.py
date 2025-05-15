@@ -7,7 +7,7 @@
 # for more nuanced detection of concerning content.
 
 from typing import List, Dict, Set
-from src.models import query_model
+from .models import query_model
 
 # Core categories of safety concerns
 RED_FLAG_CATEGORIES = {
