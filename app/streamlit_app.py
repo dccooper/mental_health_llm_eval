@@ -122,6 +122,93 @@ def render_scoring_rubric_section():
             - Red flags are pipe-separated (|)
             """)
 
+def render_prompts_section():
+    """Render the prompts upload and management section."""
+    st.sidebar.subheader("📝 Upload Prompts")
+    
+    # Download template
+    csv_template = generate_csv_template()
+    st.sidebar.download_button(
+        "📥 Download Prompts Template",
+        csv_template,
+        "prompt_template.csv",
+        "text/csv",
+        help="Download a CSV template with example prompts"
+    )
+
+    st.sidebar.write("")  # Add a small space
+
+    # Upload prompts file
+    uploaded_file = st.sidebar.file_uploader(
+        "📄 Upload Prompts File",
+        type=["yaml", "csv"],
+        help="Upload a YAML or CSV file containing evaluation prompts"
+    )
+
+    if not uploaded_file:
+        return False
+
+    try:
+        # Load and organize prompts based on file type
+        if uploaded_file.name.endswith('.csv'):
+            loaded_prompts = csv_to_yaml(uploaded_file)
+        else:
+            loaded_prompts = load_prompts(uploaded_file)
+        
+        available_categories = sorted(set(p.category for p in loaded_prompts))
+        
+        # Category filtering
+        selected_category = st.sidebar.selectbox(
+            "🏷️ Filter by Category",
+            ["All"] + available_categories,
+            help="Filter prompts by their category"
+        )
+        
+        # Prompt selection
+        filtered_prompts = [
+            p for p in loaded_prompts
+            if selected_category == "All" or p.category == selected_category
+        ]
+        
+        selected_prompt = st.sidebar.selectbox(
+            "📝 Select Prompt",
+            filtered_prompts,
+            format_func=lambda p: f"{p.id}: {p.prompt[:50]}...",
+            help="Choose a prompt to evaluate"
+        )
+        
+        # Update current evaluation state
+        if selected_prompt != st.session_state.current_prompt:
+            st.session_state.current_prompt = selected_prompt
+            try:
+                # Generate and evaluate model response
+                model_response = query_model(selected_prompt.prompt)
+                st.session_state.auto_evaluation = st.session_state.evaluator.evaluate_response(
+                    selected_prompt,
+                    model_response,
+                    validation_level
+                )
+            except RateLimitExceeded as e:
+                st.error(f"Rate limit exceeded: {str(e)}")
+                st.info("Please wait for rate limits to reset before continuing.")
+                st.session_state.auto_evaluation = None
+            except ValidationError as e:
+                st.error(f"❌ Validation failed: {str(e)}")
+                st.session_state.auto_evaluation = None
+            except ModelError as e:
+                st.error(f"🤖 Model error: {str(e)}")
+                st.session_state.auto_evaluation = None
+            except SafetyError as e:
+                st.error(f"⚠️ Safety check failed: {str(e)}")
+                st.session_state.auto_evaluation = None
+            except Exception as e:
+                st.error(f"❌ Unexpected error: {str(e)}")
+                st.session_state.auto_evaluation = None
+        return True
+    except Exception as e:
+        st.error(f"Error loading prompts: {str(e)}")
+        return False
+
 # Apply custom styling
 st.markdown(f"""
     <style>
@@ -191,9 +278,28 @@ if "results" not in st.session_state:
 with st.sidebar:
     st.title("🧠 Configuration")
     
+    # Validation level selection first (since it's used in render_prompts_section)
+    validation_level = st.selectbox(
+        "🔒 Validation Level",
+        [level.value for level in ValidationLevel],
+        help="Choose how strict the input validation should be"
+    )
+    validation_level = ValidationLevel(validation_level)
+    
+    # First section: Scoring Rubric
+    render_scoring_rubric_section()
+    
+    st.markdown("---")  # Add a divider
+    
+    # Second section: Upload Prompts
+    prompts_loaded = render_prompts_section()
+    
+    st.markdown("---")  # Add a divider
+    
     # Rate limit status
-    st.subheader("📊 Rate Limits")
     if st.session_state.evaluator:
+        st.markdown("---")  # Add a divider
+        st.subheader("📊 Rate Limits")
         rate_limits = st.session_state.evaluator.get_rate_limit_status()
         
         for operation, status in rate_limits.items():
@@ -215,95 +321,9 @@ with st.sidebar:
                 st.progress(1 - (reset_in / status['time_window']))
                 st.caption(f"Resets in {int(reset_in/60)} minutes")
     
-    # Validation level selection
-    validation_level = st.selectbox(
-        "🔒 Validation Level",
-        [level.value for level in ValidationLevel],
-        help="Choose how strict the input validation should be"
-    )
-    validation_level = ValidationLevel(validation_level)
-    
-    # Prompt bank management
-    csv_template = generate_csv_template()
-    st.download_button(
-        "📥 Download CSV Template",
-        csv_template,
-        "prompt_template.csv",
-        "text/csv",
-        help="Download a CSV template with example prompts"
-    )
-
-    st.write("")  # Add a small space
-
-    uploaded_file = st.file_uploader(
-        "📄 Upload Prompts File",
-        type=["yaml", "csv"],
-        help="Upload a YAML or CSV file containing evaluation prompts"
-    )
-
-    if uploaded_file:
-        try:
-            # Load and organize prompts based on file type
-            if uploaded_file.name.endswith('.csv'):
-                loaded_prompts = csv_to_yaml(uploaded_file)
-            else:
-                loaded_prompts = load_prompts(uploaded_file)
-            
-            available_categories = sorted(set(p.category for p in loaded_prompts))
-            
-            # Category filtering
-            selected_category = st.selectbox(
-                "🏷️ Filter by Category",
-                ["All"] + available_categories,
-                help="Filter prompts by their category"
-            )
-            
-            # Prompt selection
-            filtered_prompts = [
-                p for p in loaded_prompts
-                if selected_category == "All" or p.category == selected_category
-            ]
-            
-            selected_prompt = st.selectbox(
-                "📝 Select Prompt",
-                filtered_prompts,
-                format_func=lambda p: f"{p.id}: {p.prompt[:50]}...",
-                help="Choose a prompt to evaluate"
-            )
-            
-            # Update current evaluation state
-            if selected_prompt != st.session_state.current_prompt:
-                st.session_state.current_prompt = selected_prompt
-                try:
-                    # Generate and evaluate model response
-                    model_response = query_model(selected_prompt.prompt)
-                    st.session_state.auto_evaluation = st.session_state.evaluator.evaluate_response(
-                        selected_prompt,
-                        model_response,
-                        validation_level
-                    )
-                except RateLimitExceeded as e:
-                    st.error(f"Rate limit exceeded: {str(e)}")
-                    st.info("Please wait for rate limits to reset before continuing.")
-                    st.session_state.auto_evaluation = None
-                except ValidationError as e:
-                    st.error(f"❌ Validation failed: {str(e)}")
-                    st.session_state.auto_evaluation = None
-                except ModelError as e:
-                    st.error(f"🤖 Model error: {str(e)}")
-                    st.session_state.auto_evaluation = None
-                except SafetyError as e:
-                    st.error(f"⚠️ Safety check failed: {str(e)}")
-                    st.session_state.auto_evaluation = None
-                except Exception as e:
-                    st.error(f"❌ Unexpected error: {str(e)}")
-                    st.session_state.auto_evaluation = None
-        except Exception as e:
-            st.error(f"Error loading prompts: {str(e)}")
-    
     # Session statistics display
     if st.session_state.evaluations:
-        st.divider()
+        st.markdown("---")  # Add a divider
         st.subheader("📊 Session Stats")
         
         # Calculate key metrics
@@ -329,9 +349,6 @@ with st.sidebar:
                 delta_color="inverse",
                 help="Number of responses with critical safety concerns"
             )
-
-    # Scoring rubric section
-    render_scoring_rubric_section()
 
 # Main content area
 st.markdown("<h1 style='color: black;'>Mental Health LLM Evaluator</h1>", unsafe_allow_html=True)
@@ -371,7 +388,12 @@ Follow these steps to evaluate LLM responses:
 Need help? Check out our [documentation](https://github.com/dccooper/mental_health_llm_eval/blob/main/docs/index.md) for detailed guides.
 """)
 
-if not uploaded_file:
+# Only show evaluation interface if evaluator is initialized
+if not st.session_state.evaluator:
+    st.warning("⚠️ Please configure and initialize the evaluator to begin.")
+    st.stop()
+
+if not prompts_loaded:
     st.markdown("<div style='color: black;'>👈 Please upload a prompt bank file (CSV or YAML) to begin evaluation.</div>", unsafe_allow_html=True)
     st.stop()
 
