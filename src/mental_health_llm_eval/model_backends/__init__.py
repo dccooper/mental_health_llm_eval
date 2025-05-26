@@ -10,10 +10,11 @@ It supports:
 4. Mock/stub models for testing
 """
 
-from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, List
+from typing import Protocol, TypeVar, Dict, Any, Optional
 from dataclasses import dataclass
 from enum import Enum
+
+T = TypeVar('T', bound='ModelBackend')
 
 class ModelBackendType(Enum):
     """Types of supported model backends."""
@@ -30,38 +31,32 @@ class ModelResponse:
     metadata: Dict[str, Any]
     error: Optional[str] = None
 
-class ModelBackend(ABC):
-    """Abstract base class for model backends."""
+class ModelBackend(Protocol):
+    """Protocol defining the interface for model backends."""
     
-    @abstractmethod
-    def initialize(self, config: Dict[str, Any]) -> None:
+    def initialize(self: T, config: Dict[str, Any]) -> None:
         """
         Initialize the model backend with configuration.
         
         Args:
             config: Backend-specific configuration
         """
-        pass
+        ...
     
-    @abstractmethod
-    def validate_config(self, config: Dict[str, Any]) -> List[str]:
+    def validate_config(self: T, config: Dict[str, Any]) -> None:
         """
         Validate backend configuration.
         
         Args:
             config: Configuration to validate
-            
-        Returns:
-            List of validation errors (empty if valid)
         """
-        pass
+        ...
     
-    @abstractmethod
     def query(
-        self,
+        self: T,
         prompt: str,
         system_prompt: Optional[str] = None,
-        **kwargs
+        **kwargs: Any
     ) -> ModelResponse:
         """
         Query the model with a prompt.
@@ -74,17 +69,16 @@ class ModelBackend(ABC):
         Returns:
             Structured model response
         """
-        pass
+        ...
     
-    @abstractmethod
-    def get_capabilities(self) -> Dict[str, Any]:
+    def get_capabilities(self: T) -> Dict[str, Any]:
         """
         Get backend capabilities and limitations.
         
         Returns:
             Dictionary of capabilities
         """
-        pass
+        ...
 
 def create_backend(
     backend_type: ModelBackendType,
